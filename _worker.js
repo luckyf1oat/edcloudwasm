@@ -1,4 +1,4 @@
-// 代码基本都抄的CM和天书大佬的项目，在此感谢各位大佬的无私奉献。
+// 代码基本都抄的CM和AK大佬和天书大佬的项目，在此感谢各位大佬的无私奉献。
 import {connect} from 'cloudflare:sockets';
 const defaultUuid = ''; // 可在环境变量配置，变量名称为UUID，两个地方都不写为不验证uuid
 const defaultPassword = ''; // 可在环境变量配置，变量名称为PASSWORD，两个地方都不写为不验证密码
@@ -26,8 +26,8 @@ const flushTime = 20;                 // 20ms
 /**- **警告**: worker最大支持6，超过6没意义*/
 let concurrency = 4;//socket获取并发数
 // ---------------------------------------------------------------------------------
-//三者的socket获取顺序，全局模式下为这三个的顺序，非全局为：直连>socks>http>nat64>proxyip>finallyProxyHost
-const proxyStrategyOrder = ['socks', 'http', 'nat64'];
+//四者的socket获取顺序，全局模式下为这四个的顺序，非全局为：直连>socks>http>turn>nat64>proxyip>finallyProxyHost
+const proxyStrategyOrder = ['socks', 'http', 'turn', 'nat64'];
 const dohEndpoints = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query'];
 const dohNatEndpoints = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve'];
 const proxyIpAddrs = {EU: 'ProxyIP.DE.CMLiussss.net', AS: 'ProxyIP.SG.CMLiussss.net', JP: 'ProxyIP.JP.CMLiussss.net', US: 'ProxyIP.US.CMLiussss.net'};//分区域proxyip
@@ -110,7 +110,7 @@ const initializeWasm = (env) => {
         setSocks5AuthLenWasm(socks5Pkg.length);
     }
     if (!cachedTemplates) {
-        cachedTemplates = new Array(8);
+        cachedTemplates = new Array(12);
         const subUuid = uuid || crypto.randomUUID();
         const subPassword = password || crypto.randomUUID();
         globalThis.subUuid = subUuid;
@@ -123,10 +123,10 @@ const initializeWasm = (env) => {
         const edge = strList[2];
         userAgentSuffix = edge + strList[3] + edge + strList[4];
         subConfig = {SUBAPI: strList[0], SUBCONFIG: strList[1], FILENAME: "Free-Nodes"};
-        for (let i = 0; i < 8; i++) {
+        for (let i = 0; i < 12; i++) {
             const len = getTemplateWasm(i);
             const tmpl = textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
-            cachedTemplates[i] = i < 4 ? tmpl.replaceAll("{{UUID}}", subUuid) : tmpl.replaceAll("{{PASSWORD}}", subPassword);
+            cachedTemplates[i] = i < 6 ? tmpl.replaceAll("{{UUID}}", subUuid) : tmpl.replaceAll("{{PASSWORD}}", subPassword);
         }
     }
     isInitialized = true;
@@ -237,6 +237,134 @@ const connectViaHttpProxy = async (targetAddrType, targetPortNum, httpAuth, addr
         }
     }
     return null;
+};
+const MAGIC = new Uint8Array([0x21, 0x12, 0xA4, 0x42]);
+const MT = {AQ: 0x003, AO: 0x103, AE: 0x113, PQ: 0x008, PO: 0x108, CQ: 0x00A, CO: 0x10A, BQ: 0x00B, BO: 0x10B};
+const AT = {USER: 0x006, MI: 0x008, ERR: 0x009, PEER: 0x012, REALM: 0x014, NONCE: 0x015, TRANSPORT: 0x019, CONNID: 0x02A};
+const cat = (...a) => {
+    const r = new Uint8Array(a.reduce((s, x) => s + x.length, 0));
+    a.reduce((o, x) => (r.set(x, o), o + x.length), 0);
+    return r;
+};
+const stunAttr = (t, v) => {
+    const b = new Uint8Array(4 + v.length + (4 - v.length % 4) % 4), d = new DataView(b.buffer);
+    d.setUint16(0, t);
+    d.setUint16(2, v.length);
+    b.set(v, 4);
+    return b;
+};
+const stunMsg = (t, tid, a) => {
+    const bd = cat(...a), h = new Uint8Array(20), d = new DataView(h.buffer);
+    d.setUint16(0, t);
+    d.setUint16(2, bd.length);
+    h.set(MAGIC, 4);
+    h.set(tid, 8);
+    return cat(h, bd);
+};
+const xorPeer = (ip, port) => {
+    const b = new Uint8Array(8);
+    b[1] = 1;
+    new DataView(b.buffer).setUint16(2, port ^ 0x2112);
+    ip.split('.').forEach((v, i) => b[4 + i] = +v ^ MAGIC[i]);
+    return b;
+};
+const parseStun = d => {
+    if (d.length < 20 || MAGIC.some((v, i) => d[4 + i] !== v)) return null;
+    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength), ml = dv.getUint16(2), attrs = {};
+    for (let o = 20; o + 4 <= 20 + ml;) {
+        const t = dv.getUint16(o), l = dv.getUint16(o + 2);
+        if (o + 4 + l > d.length) break;
+        attrs[t] = d.slice(o + 4, o + 4 + l);
+        o += 4 + l + (4 - l % 4) % 4;
+    }
+    return {type: dv.getUint16(0), attrs};
+};
+const parseErr = d => d?.length >= 4 ? (d[2] & 7) * 100 + d[3] : 0;
+const addIntegrity = async (m, key) => {
+    const c = new Uint8Array(m), d = new DataView(c.buffer);
+    d.setUint16(2, d.getUint16(2) + 24);
+    const k = await crypto.subtle.importKey('raw', key, {name: 'HMAC', hash: 'SHA-1'}, false, ['sign']);
+    return cat(c, stunAttr(AT.MI, new Uint8Array(await crypto.subtle.sign('HMAC', k, c))));
+};
+const readStun = async (rd, buf) => {
+    let b = buf ?? new Uint8Array(0);
+    const pull = async () => {
+        const {done, value} = await rd.read();
+        if (done) throw 0;
+        b = cat(b, new Uint8Array(value));
+    };
+    try {
+        while (b.length < 20) await pull();
+        if (b[4] !== 0x21 || b[5] !== 0x12 || b[6] !== 0xA4 || b[7] !== 0x42) return null;
+        const n = 20 + (b[2] << 8 | b[3]);
+        if (n > 8192) return null;
+        while (b.length < n) await pull();
+        return [parseStun(b.subarray(0, n)), b.length > n ? b.subarray(n) : null];
+    } catch {return null}
+};
+const md5 = async s => new Uint8Array(await crypto.subtle.digest('MD5', textEncoder.encode(s)));
+const connectViaTurnProxy = async ({hostname, port, username, password}, targetIp, targetPort) => {
+    let ctrl = null, data = null, dataPromise = null;
+    const close = () => [ctrl, data].forEach(s => {try {s?.close()} catch {}});
+    try {
+        ctrl = await createConnect(hostname, port);
+        const cw = ctrl.writable.getWriter(), cr = ctrl.readable.getReader(), tid = () => crypto.getRandomValues(new Uint8Array(12)), tp = new Uint8Array([6, 0, 0, 0]);
+        await cw.write(stunMsg(MT.AQ, tid(), [stunAttr(AT.TRANSPORT, tp)]));
+        let [r, ex] = await readStun(cr);
+        if (!r) {
+            close();
+            return null;
+        }
+        let key = null, aa = [];
+        const sign = m => key ? addIntegrity(m, key) : m, peer = stunAttr(AT.PEER, xorPeer(targetIp, targetPort));
+        if (r.type === MT.AE && username && parseErr(r.attrs[AT.ERR]) === 401) {
+            const realm = textDecoder.decode(r.attrs[AT.REALM] ?? new Uint8Array(0)), nonce = r.attrs[AT.NONCE] ?? new Uint8Array(0);
+            key = await md5(`${username}:${realm}:${password}`);
+            aa = [stunAttr(AT.USER, textEncoder.encode(username)), stunAttr(AT.REALM, textEncoder.encode(realm)), stunAttr(AT.NONCE, nonce)];
+            const [am, pm, cm] = await Promise.all([sign(stunMsg(MT.AQ, tid(), [stunAttr(AT.TRANSPORT, tp), ...aa])), sign(stunMsg(MT.PQ, tid(), [peer, ...aa])), sign(stunMsg(MT.CQ, tid(), [peer, ...aa]))]);
+            await cw.write(cat(am, pm, cm));
+            dataPromise = createConnect(hostname, port);
+            [r, ex] = await readStun(cr, ex);
+            if (r?.type !== MT.AO) {
+                close();
+                return null;
+            }
+        } else if (r.type === MT.AO) {
+            const [pm, cm] = await Promise.all([sign(stunMsg(MT.PQ, tid(), [peer, ...aa])), sign(stunMsg(MT.CQ, tid(), [peer, ...aa]))]);
+            await cw.write(cat(pm, cm));
+            dataPromise = createConnect(hostname, port);
+        } else {
+            close();
+            return null;
+        }
+        [r, ex] = await readStun(cr, ex);
+        if (r?.type !== MT.PO) {
+            close();
+            return null;
+        }
+        [r] = await readStun(cr, ex);
+        if (r?.type !== MT.CO || !r.attrs[AT.CONNID]) {
+            close();
+            return null;
+        }
+        data = await dataPromise;
+        const dw = data.writable.getWriter(), dr = data.readable.getReader();
+        await dw.write(await sign(stunMsg(MT.BQ, tid(), [stunAttr(AT.CONNID, r.attrs[AT.CONNID]), ...aa])));
+        let extra;
+        [r, extra] = await readStun(dr);
+        if (r?.type !== MT.BO) {
+            close();
+            return null;
+        }
+        cr.releaseLock();
+        cw.releaseLock();
+        dw.releaseLock();
+        dr.releaseLock();
+        return {readable: data.readable, writable: data.writable, close, extra};
+    } catch {
+        close();
+        return null;
+    }
 };
 const ipv4ToNat64Ipv6 = (ipv4Address, nat64Prefixes) => {
     const parts = ipv4Address.split('.');
@@ -349,6 +477,24 @@ const strategyExecutorMap = new Map([
     [4, async ({addrType, port, addrBytes, isHttp}, param, limit) => {
         const {nat64Auth, proxyAll} = param;
         return connectNat64(addrType, port, nat64Auth, addrBytes, proxyAll, limit, isHttp);
+    }],
+    // @ts-ignore
+    [5, async ({addrType, port, addrBytes, isHttp}, param) => {
+        const turnAuth = parseAuthString(param);
+        let targetIp = binaryAddrToString(addrType, addrBytes);
+        if (isHttp) {
+            wasmMem.set(addrBytes, dataPtr);
+            addrType = getCorrectAddrTypeWasm(addrBytes.length);
+        }
+        if (addrType === 3) {
+            const answer = await concurrentDnsResolve(targetIp, 'A');
+            const aRecord = answer?.find(record => record.type === 1);
+            if (!aRecord) return null;
+            targetIp = aRecord.data;
+        } else if (addrType === 4) {
+            return null;
+        }
+        return connectViaTurnProxy(turnAuth, targetIp, port);
     }]
 ]);
 const getUrlParam = (offset, len) => {
@@ -369,13 +515,13 @@ const establishTcpConnection = async (parsedRequest, request) => {
         const urlBytes = textEncoder.encode(clean);
         wasmMem.set(urlBytes, dataPtr);
         parseUrlWasm(urlBytes.length);
-        const r = wasmRes, s5Val = getUrlParam(r[13], r[14]), httpVal = getUrlParam(r[15], r[16]), nat64Val = getUrlParam(r[17], r[18]), ipVal = getUrlParam(r[19], r[20]), proxyAll = r[21] === 1;
+        const r = wasmRes, s5Val = getUrlParam(r[13], r[14]), httpVal = getUrlParam(r[15], r[16]), nat64Val = getUrlParam(r[17], r[18]), turnVal = getUrlParam(r[22], r[23]), ipVal = getUrlParam(r[19], r[20]), proxyAll = r[21] === 1;
         !proxyAll && list.push({type: 0});
         const add = (v, t) => {
             const parts = v && decodeURIComponent(v).split(',').filter(Boolean);
             parts?.length && list.push({type: t, param: parts.map(p => t === 4 ? {nat64Auth: p, proxyAll} : p), concurrent: true});
         };
-        for (const k of proxyStrategyOrder) k === 'socks' ? add(s5Val, 1) : k === 'http' ? add(httpVal, 2) : add(nat64Val, 4);
+        for (const k of proxyStrategyOrder) k === 'socks' ? add(s5Val, 1) : k === 'http' ? add(httpVal, 2) : k === 'turn' ? add(turnVal, 5) : add(nat64Val, 4);
         if (proxyAll) {
             !list.length && list.push({type: 0});
         } else {
@@ -445,6 +591,7 @@ const handleSession = async (chunk, state, request, writable, close) => {
         const tcpWriter = state.tcpSocket.writable.getWriter();
         if (payload.byteLength) await tcpWriter.write(payload);
         state.tcpWriter = (c) => tcpWriter.write(c);
+        if (state.tcpSocket.extra?.length) writable.send(state.tcpSocket.extra);
         manualPipe(state.tcpSocket.readable, writable).finally(() => close());
     }
 };
@@ -562,6 +709,7 @@ const getSub = async (request, url, uuid) => {
     const hasTR = url.searchParams.get('tj') === '1';
     const hasWS = url.searchParams.get('ws') === '1';
     const hasXhttp = url.searchParams.get('xhttp') === '1';
+    const hasGRPC = url.searchParams.get('grpc') === '1';
     const hasECH = url.searchParams.get('ech') === '1';
     const encPath = encodeURIComponent(proxyPath);
     const parts = [];
@@ -574,21 +722,22 @@ const getSub = async (request, url, uuid) => {
     const addNodes = (base) => {
         if (hasWS) processTemplate(base + (hasECH ? 1 : 0));
         if (hasXhttp) processTemplate(base + (hasECH ? 3 : 2));
+        if (hasGRPC) processTemplate(base + (hasECH ? 5 : 4));
     };
     if (hasVL) addNodes(0);
-    if (hasTR) addNodes(4);
+    if (hasTR) addNodes(6);
     const finalLinks = parts.join("\n");
     const base64Links = btoa(unescape(encodeURIComponent(finalLinks)));
     if (UA.includes(strList[18])) return new Response(base64Links, {headers: {'Content-Type': 'text/plain; charset=utf-8'}});
     if (url.searchParams.get('format') === 'raw') return new Response(finalLinks, {headers: {'Content-Type': 'text/plain; charset=utf-8'}});
     const target = (url.searchParams.has(strList[5]) || UA.includes(strList[5]) || UA.includes(strList[15]) || UA.includes(strList[16])) ? strList[5]
         : (url.searchParams.has(strList[11]) || url.searchParams.has(strList[6]) || UA.includes(strList[12]) || UA.includes(strList[6])) ? strList[6]
-        : (url.searchParams.has(strList[13]) || UA.includes(strList[13])) ? strList[7]
-        : (url.searchParams.has(strList[8]) || UA.includes(strList[14])) ? strList[8]
-        : (url.searchParams.has(strList[9]) || UA.includes(strList[9])) ? strList[9]
-        : (url.searchParams.has(strList[10]) || UA.includes(strList[10])) ? strList[10] : '';
+            : (url.searchParams.has(strList[13]) || UA.includes(strList[13])) ? strList[7]
+                : (url.searchParams.has(strList[8]) || UA.includes(strList[14])) ? strList[8]
+                    : (url.searchParams.has(strList[9]) || UA.includes(strList[9])) ? strList[9]
+                        : (url.searchParams.has(strList[10]) || UA.includes(strList[10])) ? strList[10] : '';
     if (target) {
-        const baseUrl = `${url.protocol}//${url.host}${url.pathname}?uuid=${globalThis.subUuid}&format=raw&path=${encPath}&vl=${hasVL ? 1 : 0}&tj=${hasTR ? 1 : 0}&ws=${hasWS ? 1 : 0}&xhttp=${hasXhttp ? 1 : 0}`;
+        const baseUrl = `${url.protocol}//${url.host}${url.pathname}?uuid=${globalThis.subUuid}&format=raw&path=${encPath}&vl=${hasVL ? 1 : 0}&tj=${hasTR ? 1 : 0}&ws=${hasWS ? 1 : 0}&xhttp=${hasXhttp ? 1 : 0}&grpc=${hasGRPC ? 1 : 0}`;
         const convertUrl = `${strList[0]}/sub?target=${target}&url=${encodeURIComponent(baseUrl)}&insert=false&config=${encodeURIComponent(strList[1])}&emoji=true&scv=true`;
         try {
             const response = await fetch(convertUrl, {
