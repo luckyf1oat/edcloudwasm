@@ -83,7 +83,6 @@ const getEnv = (env) => {
     return config;
 };
 const initializeWasm = (env) => {
-    if (isInitialized) return;
     const {uuid, password, user, pass} = getEnv(env);
     const cleanUuid = uuid.replace(/-/g, "");
     if (cleanUuid.length === 32) {
@@ -109,25 +108,23 @@ const initializeWasm = (env) => {
         wasmMem.set(socks5Pkg, getSocks5AuthPtr());
         setSocks5AuthLenWasm(socks5Pkg.length);
     }
-    if (!cachedTemplates) {
-        cachedTemplates = new Array(12);
-        const subUuid = uuid || crypto.randomUUID();
-        const subPassword = password || crypto.randomUUID();
-        globalThis.subUuid = subUuid;
-        const getSecret = (idx) => {
-            const len = getSecretStringWasm(idx);
-            return textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
-        };
-        strList = new Array(20);
-        for (let i = 0; i < 20; i++) {strList[i] = getSecret(i)}
-        const edge = strList[2];
-        userAgentSuffix = edge + strList[3] + edge + strList[4];
-        subConfig = {SUBAPI: strList[0], SUBCONFIG: strList[1], FILENAME: "Free-Nodes"};
-        for (let i = 0; i < 12; i++) {
-            const len = getTemplateWasm(i);
-            const tmpl = textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
-            cachedTemplates[i] = i < 6 ? tmpl.replaceAll("{{UUID}}", subUuid) : tmpl.replaceAll("{{PASSWORD}}", subPassword);
-        }
+    cachedTemplates = new Array(12);
+    const subUuid = uuid || crypto.randomUUID();
+    const subPassword = password || crypto.randomUUID();
+    globalThis.subUuid = subUuid;
+    const getSecret = (idx) => {
+        const len = getSecretStringWasm(idx);
+        return textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
+    };
+    strList = new Array(20);
+    for (let i = 0; i < 20; i++) {strList[i] = getSecret(i)}
+    const edge = strList[2];
+    userAgentSuffix = edge + strList[3] + edge + strList[4];
+    subConfig = {SUBAPI: strList[0], SUBCONFIG: strList[1], FILENAME: "Free-Nodes"};
+    for (let i = 0; i < 12; i++) {
+        const len = getTemplateWasm(i);
+        const tmpl = textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
+        cachedTemplates[i] = i < 6 ? tmpl.replaceAll("{{UUID}}", subUuid) : tmpl.replaceAll("{{PASSWORD}}", subPassword);
     }
     isInitialized = true;
 };
@@ -239,67 +236,92 @@ const connectViaHttpProxy = async (targetAddrType, targetPortNum, httpAuth, addr
     return null;
 };
 const MAGIC = new Uint8Array([0x21, 0x12, 0xA4, 0x42]);
-const MT = {AQ: 0x003, AO: 0x103, AE: 0x113, PQ: 0x008, PO: 0x108, CQ: 0x00A, CO: 0x10A, BQ: 0x00B, BO: 0x10B};
-const AT = {USER: 0x006, MI: 0x008, ERR: 0x009, PEER: 0x012, REALM: 0x014, NONCE: 0x015, TRANSPORT: 0x019, CONNID: 0x02A};
 const cat = (...a) => {
-    const r = new Uint8Array(a.reduce((s, x) => s + x.length, 0));
-    a.reduce((o, x) => (r.set(x, o), o + x.length), 0);
+    let len = 0, i = 0, o = 0;
+    for (; i < a.length; i++) len += a[i].length;
+    const r = new Uint8Array(len);
+    for (i = 0; i < a.length; i++) {
+        r.set(a[i], o);
+        o += a[i].length;
+    }
     return r;
 };
 const stunAttr = (t, v) => {
-    const b = new Uint8Array(4 + v.length + (4 - v.length % 4) % 4), d = new DataView(b.buffer);
-    d.setUint16(0, t);
-    d.setUint16(2, v.length);
-    b.set(v, 4);
+    const l = v.length, b = new Uint8Array(4 + l + (4 - l % 4) % 4);
+    b[0] = t >> 8, b[1] = t & 0xff, b[2] = l >> 8, b[3] = l & 0xff, b.set(v, 4);
     return b;
 };
 const stunMsg = (t, tid, a) => {
-    const bd = cat(...a), h = new Uint8Array(20), d = new DataView(h.buffer);
-    d.setUint16(0, t);
-    d.setUint16(2, bd.length);
-    h.set(MAGIC, 4);
-    h.set(tid, 8);
-    return cat(h, bd);
+    const bd = cat(...a), l = bd.length, h = new Uint8Array(20 + l);
+    h[0] = t >> 8, h[1] = t & 0xff, h[2] = l >> 8, h[3] = l & 0xff, h.set(MAGIC, 4), h.set(tid, 8), h.set(bd, 20);
+    return h;
 };
 const xorPeer = (ip, port) => {
     const b = new Uint8Array(8);
     b[1] = 1;
-    new DataView(b.buffer).setUint16(2, port ^ 0x2112);
-    ip.split('.').forEach((v, i) => b[4 + i] = +v ^ MAGIC[i]);
+    const xp = port ^ 0x2112;
+    b[2] = xp >> 8, b[3] = xp & 0xff;
+    let p = 0, num = 0;
+    for (let i = 0; i < ip.length; i++) {
+        const c = ip.charCodeAt(i);
+        if (c === 46) {
+            b[4 + p] = num ^ MAGIC[p++];
+            num = 0;
+        } else {num = num * 10 + (c - 48)}
+    }
+    b[4 + p] = num ^ MAGIC[p];
     return b;
 };
 const parseStun = d => {
     if (d.length < 20 || MAGIC.some((v, i) => d[4 + i] !== v)) return null;
-    const dv = new DataView(d.buffer, d.byteOffset, d.byteLength), ml = dv.getUint16(2), attrs = {};
+    const ml = (d[2] << 8) | d[3], attrs = {};
     for (let o = 20; o + 4 <= 20 + ml;) {
-        const t = dv.getUint16(o), l = dv.getUint16(o + 2);
+        const t = (d[o] << 8) | d[o + 1], l = (d[o + 2] << 8) | d[o + 3];
         if (o + 4 + l > d.length) break;
-        attrs[t] = d.slice(o + 4, o + 4 + l);
+        attrs[t] = d.subarray(o + 4, o + 4 + l);
         o += 4 + l + (4 - l % 4) % 4;
     }
-    return {type: dv.getUint16(0), attrs};
+    return {type: (d[0] << 8) | d[1], attrs};
 };
 const parseErr = d => d?.length >= 4 ? (d[2] & 7) * 100 + d[3] : 0;
-const addIntegrity = async (m, key) => {
-    const c = new Uint8Array(m), d = new DataView(c.buffer);
-    d.setUint16(2, d.getUint16(2) + 24);
-    const k = await crypto.subtle.importKey('raw', key, {name: 'HMAC', hash: 'SHA-1'}, false, ['sign']);
-    return cat(c, stunAttr(AT.MI, new Uint8Array(await crypto.subtle.sign('HMAC', k, c))));
+const addIntegrity = async (m, cryptoKey) => {
+    const l = m.length, c = new Uint8Array(l + 24);
+    c.set(m);
+    const nl = (m[2] << 8 | m[3]) + 24;
+    c[2] = nl >> 8, c[3] = nl & 0xff;
+    const sig = new Uint8Array(await crypto.subtle.sign('HMAC', cryptoKey, c.subarray(0, l)));
+    c[l] = 0x00, c[l + 1] = 0x08, c[l + 2] = 0x00, c[l + 3] = 0x14, c.set(sig, l + 4);
+    return c;
 };
 const readStun = async (rd, buf) => {
-    let b = buf ?? new Uint8Array(0);
+    let chunks = buf && buf.length ? [buf] : [];
+    let total = buf ? buf.length : 0;
     const pull = async () => {
         const {done, value} = await rd.read();
         if (done) throw 0;
-        b = cat(b, new Uint8Array(value));
+        chunks.push(value);
+        total += value.length;
+    };
+    const getB = () => {
+        if (chunks.length === 1) return chunks[0];
+        const b = new Uint8Array(total);
+        let o = 0;
+        for (let i = 0; i < chunks.length; i++) {
+            b.set(chunks[i], o);
+            o += chunks[i].length;
+        }
+        chunks = [b];
+        return b;
     };
     try {
-        while (b.length < 20) await pull();
+        while (total < 20) await pull();
+        let b = getB();
         if (b[4] !== 0x21 || b[5] !== 0x12 || b[6] !== 0xA4 || b[7] !== 0x42) return null;
-        const n = 20 + (b[2] << 8 | b[3]);
+        const n = 20 + ((b[2] << 8) | b[3]);
         if (n > 8192) return null;
-        while (b.length < n) await pull();
-        return [parseStun(b.subarray(0, n)), b.length > n ? b.subarray(n) : null];
+        while (total < n) await pull();
+        b = getB();
+        return [parseStun(b.subarray(0, n)), total > n ? b.subarray(n) : null];
     } catch {return null}
 };
 const md5 = async s => new Uint8Array(await crypto.subtle.digest('MD5', textEncoder.encode(s)));
@@ -308,58 +330,47 @@ const connectViaTurnProxy = async ({hostname, port, username, password}, targetI
     const close = () => [ctrl, data].forEach(s => {try {s?.close()} catch {}});
     try {
         ctrl = await createConnect(hostname, port);
-        const cw = ctrl.writable.getWriter(), cr = ctrl.readable.getReader(), tid = () => crypto.getRandomValues(new Uint8Array(12)), tp = new Uint8Array([6, 0, 0, 0]);
-        await cw.write(stunMsg(MT.AQ, tid(), [stunAttr(AT.TRANSPORT, tp)]));
+        const cw = ctrl.writable.getWriter(), cr = ctrl.readable.getReader();
+        const tidBuf = new Uint8Array(12), tid = () => crypto.getRandomValues(tidBuf), tp = new Uint8Array([6, 0, 0, 0]);
+        await cw.write(stunMsg(0x003, tid(), [stunAttr(0x019, tp)]));
         let [r, ex] = await readStun(cr);
-        if (!r) {
-            close();
-            return null;
-        }
-        let key = null, aa = [];
-        const sign = m => key ? addIntegrity(m, key) : m, peer = stunAttr(AT.PEER, xorPeer(targetIp, targetPort));
-        if (r.type === MT.AE && username && parseErr(r.attrs[AT.ERR]) === 401) {
-            const realm = textDecoder.decode(r.attrs[AT.REALM] ?? new Uint8Array(0)), nonce = r.attrs[AT.NONCE] ?? new Uint8Array(0);
-            key = await md5(`${username}:${realm}:${password}`);
-            aa = [stunAttr(AT.USER, textEncoder.encode(username)), stunAttr(AT.REALM, textEncoder.encode(realm)), stunAttr(AT.NONCE, nonce)];
-            const [am, pm, cm] = await Promise.all([sign(stunMsg(MT.AQ, tid(), [stunAttr(AT.TRANSPORT, tp), ...aa])), sign(stunMsg(MT.PQ, tid(), [peer, ...aa])), sign(stunMsg(MT.CQ, tid(), [peer, ...aa]))]);
+        if (!r) throw 0;
+        let cryptoKey = null, aa = [];
+        const sign = m => cryptoKey ? addIntegrity(m, cryptoKey) : m;
+        const peer = stunAttr(0x012, xorPeer(targetIp, targetPort));
+        if (r.type === 0x113 && username && parseErr(r.attrs[0x009]) === 401) {
+            const realm = textDecoder.decode(r.attrs[0x014] ?? []), nonce = r.attrs[0x015] ?? [];
+            const keyBytes = await md5(`${username}:${realm}:${password}`);
+            cryptoKey = await crypto.subtle.importKey('raw', keyBytes, {name: 'HMAC', hash: 'SHA-1'}, false, ['sign']);
+            aa = [stunAttr(0x006, textEncoder.encode(username)), stunAttr(0x014, textEncoder.encode(realm)), stunAttr(0x015, nonce)];
+            const [am, pm, cm] = await Promise.all([
+                sign(stunMsg(0x003, tid(), [stunAttr(0x019, tp), ...aa])),
+                sign(stunMsg(0x008, tid(), [peer, ...aa])),
+                sign(stunMsg(0x00A, tid(), [peer, ...aa]))
+            ]);
             await cw.write(cat(am, pm, cm));
             dataPromise = createConnect(hostname, port);
             [r, ex] = await readStun(cr, ex);
-            if (r?.type !== MT.AO) {
-                close();
-                return null;
-            }
-        } else if (r.type === MT.AO) {
-            const [pm, cm] = await Promise.all([sign(stunMsg(MT.PQ, tid(), [peer, ...aa])), sign(stunMsg(MT.CQ, tid(), [peer, ...aa]))]);
+            if (r?.type !== 0x103) throw 0;
+        } else if (r.type === 0x103) {
+            const [pm, cm] = await Promise.all([
+                sign(stunMsg(0x008, tid(), [peer, ...aa])),
+                sign(stunMsg(0x00A, tid(), [peer, ...aa]))
+            ]);
             await cw.write(cat(pm, cm));
             dataPromise = createConnect(hostname, port);
-        } else {
-            close();
-            return null;
-        }
+        } else {throw 0}
         [r, ex] = await readStun(cr, ex);
-        if (r?.type !== MT.PO) {
-            close();
-            return null;
-        }
+        if (r?.type !== 0x108) throw 0;
         [r] = await readStun(cr, ex);
-        if (r?.type !== MT.CO || !r.attrs[AT.CONNID]) {
-            close();
-            return null;
-        }
+        if (r?.type !== 0x10A || !r.attrs[0x02A]) throw 0;
         data = await dataPromise;
         const dw = data.writable.getWriter(), dr = data.readable.getReader();
-        await dw.write(await sign(stunMsg(MT.BQ, tid(), [stunAttr(AT.CONNID, r.attrs[AT.CONNID]), ...aa])));
+        await dw.write(await sign(stunMsg(0x00B, tid(), [stunAttr(0x02A, r.attrs[0x02A]), ...aa])));
         let extra;
         [r, extra] = await readStun(dr);
-        if (r?.type !== MT.BO) {
-            close();
-            return null;
-        }
-        cr.releaseLock();
-        cw.releaseLock();
-        dw.releaseLock();
-        dr.releaseLock();
+        if (r?.type !== 0x10B) throw 0;
+        cr.releaseLock(), cw.releaseLock(), dw.releaseLock(), dr.releaseLock();
         return {readable: data.readable, writable: data.writable, close, extra};
     } catch {
         close();
@@ -615,7 +626,7 @@ const handlePost = async (request) => {
     const state = {socks5State: 0, tcpWriter: null, tcpSocket: null};
     const _maxChunkLen = maxChunkLen;
     let sessionBuffer = new ArrayBuffer(131072);
-    const isGrpc = !(request.headers.get('Referer') || '').includes('x_padding');
+    const isGrpc = !(request.headers.get('Referer') || '').includes('x_padding', 14);
     const responseHeaders = new Headers(xhttpResponseHeaders);
     if (isGrpc) {
         responseHeaders.set('Content-Type', 'application/grpc');
@@ -697,11 +708,12 @@ const handlePost = async (request) => {
         cancel() {state.tcpSocket?.close(), reader.releaseLock()}
     }), {headers: responseHeaders});
 };
+const getErrorResponse = async (status = 200) => {
+    if (!rawErrorHtml) rawErrorHtml = await decompressWasm(getErrorHtmlPtr, getErrorHtmlLen);
+    return new Response(rawErrorHtml, {status, headers: {'Content-Type': 'text/html; charset=UTF-8'}});
+};
 const getSub = async (request, url, uuid) => {
-    if (uuid && url.searchParams.get('uuid') !== uuid) {
-        if (!rawErrorHtml) rawErrorHtml = await decompressWasm(getErrorHtmlPtr, getErrorHtmlLen);
-        return new Response(rawErrorHtml, {status: 404, headers: {'Content-Type': 'text/html; charset=UTF-8'}});
-    }
+    if (uuid && url.searchParams.get('uuid') !== uuid) return await getErrorResponse(404);
     const UA = (request.headers.get('User-Agent') || '').toLowerCase();
     const proxyPath = url.searchParams.get('path') || '';
     const host = url.hostname;
@@ -759,7 +771,7 @@ const getSub = async (request, url, uuid) => {
 };
 export default {
     async fetch(request, env) {
-        initializeWasm(env);
+        if (!isInitialized) initializeWasm(env);
         if (request.method === 'POST') return handlePost(request);
         if (request.headers.get('Upgrade') === 'websocket') {
             const {0: clientSocket, 1: webSocket} = new WebSocketPair();
@@ -778,7 +790,6 @@ export default {
             }
             return new Response(rawHtml, {headers: {'Content-Type': 'text/html; charset=UTF-8'}});
         }
-        if (!rawErrorHtml) rawErrorHtml = await decompressWasm(getErrorHtmlPtr, getErrorHtmlLen);
-        return new Response(rawErrorHtml, {headers: {'Content-Type': 'text/html; charset=UTF-8'}});
+        return await getErrorResponse();
     }
 };
