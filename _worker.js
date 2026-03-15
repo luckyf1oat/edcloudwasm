@@ -502,9 +502,7 @@ const strategyExecutorMap = new Map([
             const aRecord = answer?.find(record => record.type === 1);
             if (!aRecord) return null;
             targetIp = aRecord.data;
-        } else if (addrType === 4) {
-            return null;
-        }
+        } else if (addrType === 4) {return null}
         return connectViaTurnProxy(turnAuth, targetIp, port);
     }]
 ]);
@@ -520,7 +518,7 @@ const establishTcpConnection = async (parsedRequest, request) => {
         const c = clean.charCodeAt(l - 1);
         if (c === 47 || c === 61) clean = clean.slice(0, l - 1);
     }
-    if (clean.length < 6) {
+    if (clean.length < 6 || clean.length > 2048) {
         list.push({type: 0}, {type: 3, param: coloToProxyMap.get(request.cf?.colo) ?? proxyIpAddrs.US}, {type: 3, param: finallyProxyHost});
     } else {
         const urlBytes = textEncoder.encode(clean);
@@ -577,8 +575,9 @@ const manualPipe = async (readable, writable) => {
     } finally {isReading = false, flush(), reader.releaseLock()}
 };
 const handleSession = async (chunk, state, request, writable, close) => {
-    wasmMem.set(chunk, dataPtr);
-    const success = parseProtocolWasm(chunk.length, state.socks5State);
+    const parseLen = Math.min(chunk.length, 1024);
+    wasmMem.set(chunk.subarray(0, parseLen), dataPtr);
+    const success = parseProtocolWasm(parseLen, state.socks5State);
     const r = wasmRes;
     const hLen = r[12];
     if (hLen > 0) writable.send(wasmMem.slice(dataPtr, dataPtr + hLen));
