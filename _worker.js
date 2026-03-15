@@ -108,25 +108,23 @@ const initializeWasm = (env) => {
         wasmMem.set(socks5Pkg, getSocks5AuthPtr());
         setSocks5AuthLenWasm(socks5Pkg.length);
     }
-    if (!cachedTemplates) {
-        cachedTemplates = new Array(12);
-        const subUuid = uuid || crypto.randomUUID();
-        const subPassword = password || crypto.randomUUID();
-        globalThis.subUuid = subUuid;
-        const getSecret = (idx) => {
-            const len = getSecretStringWasm(idx);
-            return textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
-        };
-        strList = new Array(20);
-        for (let i = 0; i < 20; i++) {strList[i] = getSecret(i)}
-        const edge = strList[2];
-        userAgentSuffix = edge + strList[3] + edge + strList[4];
-        subConfig = {SUBAPI: strList[0], SUBCONFIG: strList[1], FILENAME: "Free-Nodes"};
-        for (let i = 0; i < 12; i++) {
-            const len = getTemplateWasm(i);
-            const tmpl = textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
-            cachedTemplates[i] = i < 6 ? tmpl.replaceAll("{{UUID}}", subUuid) : tmpl.replaceAll("{{PASSWORD}}", subPassword);
-        }
+    cachedTemplates = new Array(12);
+    const subUuid = uuid || crypto.randomUUID();
+    const subPassword = password || crypto.randomUUID();
+    globalThis.subUuid = subUuid;
+    const getSecret = (idx) => {
+        const len = getSecretStringWasm(idx);
+        return textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
+    };
+    strList = new Array(20);
+    for (let i = 0; i < 20; i++) {strList[i] = getSecret(i)}
+    const edge = strList[2];
+    userAgentSuffix = edge + strList[3] + edge + strList[4];
+    subConfig = {SUBAPI: strList[0], SUBCONFIG: strList[1], FILENAME: "Free-Nodes"};
+    for (let i = 0; i < 12; i++) {
+        const len = getTemplateWasm(i);
+        const tmpl = textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
+        cachedTemplates[i] = i < 6 ? tmpl.replaceAll("{{UUID}}", subUuid) : tmpl.replaceAll("{{PASSWORD}}", subPassword);
     }
     isInitialized = true;
 };
@@ -710,11 +708,12 @@ const handlePost = async (request) => {
         cancel() {state.tcpSocket?.close(), reader.releaseLock()}
     }), {headers: responseHeaders});
 };
+const getErrorResponse = async (status = 200) => {
+    if (!rawErrorHtml) rawErrorHtml = await decompressWasm(getErrorHtmlPtr, getErrorHtmlLen);
+    return new Response(rawErrorHtml, {status, headers: {'Content-Type': 'text/html; charset=UTF-8'}});
+};
 const getSub = async (request, url, uuid) => {
-    if (uuid && url.searchParams.get('uuid') !== uuid) {
-        if (!rawErrorHtml) rawErrorHtml = await decompressWasm(getErrorHtmlPtr, getErrorHtmlLen);
-        return new Response(rawErrorHtml, {status: 404, headers: {'Content-Type': 'text/html; charset=UTF-8'}});
-    }
+    if (uuid && url.searchParams.get('uuid') !== uuid) return await getErrorResponse(404);
     const UA = (request.headers.get('User-Agent') || '').toLowerCase();
     const proxyPath = url.searchParams.get('path') || '';
     const host = url.hostname;
@@ -791,7 +790,6 @@ export default {
             }
             return new Response(rawHtml, {headers: {'Content-Type': 'text/html; charset=UTF-8'}});
         }
-        if (!rawErrorHtml) rawErrorHtml = await decompressWasm(getErrorHtmlPtr, getErrorHtmlLen);
-        return new Response(rawErrorHtml, {headers: {'Content-Type': 'text/html; charset=UTF-8'}});
+        return await getErrorResponse();
     }
 };
