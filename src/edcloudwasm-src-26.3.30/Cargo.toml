@@ -1,0 +1,28 @@
+[package]
+name = "protocol-parser"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+# 1. 极端优化等级：'s' 或 'z' 优化体积，'3' 优化速度。
+# 对于代理，建议用 's'，它在保持高性能的同时大幅压缩体积。
+opt-level = 3
+
+# 2. 启用全量 LTO (Link Time Optimization)
+# 跨模块优化代码，能删除更多无用代码
+lto = true 
+
+# 3. 限制并行编译单元为 1
+# 牺牲编译速度，换取编译器对全局逻辑的极致优化
+codegen-units = 1 
+
+# 4. 遇到 Panic 直接终止
+# 移除所有异常回溯逻辑（Unwinding），节省大量体积
+panic = "abort" 
+
+# 5. 剥离符号表
+# 移除所有调试信息和函数名
+strip = true
