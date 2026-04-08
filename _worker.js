@@ -684,9 +684,9 @@ const handleGrpcPost = async (request) => {
             };
             const close = () => {reader.releaseLock(), state.tcpSocket?.close(), controller.close()};
             (async () => {
-                let grpcBuffer = new ArrayBuffer(131072), used = 0, offset = 0;
+                let grpcBuffer = new ArrayBuffer(73728), used = 0, offset = 0;
                 while (true) {
-                    const {done, value} = await reader.read(new Uint8Array(grpcBuffer, used, 65536));
+                    const {done, value} = await reader.read(new Uint8Array(grpcBuffer, used, 8192));
                     if (done) break;
                     grpcBuffer = value.buffer;
                     const bufToProcess = new Uint8Array(grpcBuffer, 0, used + value.byteLength), bufLen = bufToProcess.byteLength;
@@ -721,10 +721,10 @@ const handleXhttpPost = async (request) => {
             const writable = {send: (chunk) => controller.enqueue(chunk)};
             const close = () => {reader.releaseLock(), state.tcpSocket?.close(), controller.close()};
             (async () => {
-                let xhttpBuffer = new ArrayBuffer(65536), used = 0, offset = 0;
+                let xhttpBuffer = new ArrayBuffer(8192), used = 0, offset = 0;
                 while (true) {
                     offset = used;
-                    const {done, value} = await reader.read(new Uint8Array(xhttpBuffer, offset, offset === 0 ? 65536 : 32768));
+                    const {done, value} = await reader.read(new Uint8Array(xhttpBuffer, offset, offset === 0 ? 8192 : 4096));
                     if (done) break;
                     xhttpBuffer = value.buffer;
                     used += value.byteLength;
