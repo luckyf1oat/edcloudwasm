@@ -35,10 +35,7 @@ const dohNatEndpoints = ['https://cloudflare-dns.com/dns-query', 'https://dns.go
 const proxyIpAddrs = {EU: 'ProxyIP.DE.CMLiussss.net', AS: 'ProxyIP.SG.CMLiussss.net', JP: 'ProxyIP.JP.CMLiussss.net', US: 'ProxyIP.US.CMLiussss.net'};//分区域proxyip
 const finallyProxyHost = 'ProxyIP.CMLiussss.net';//兜底proxyip
 // 订阅和面板使用的优选ip地址，可支持ip:port#name格式
-const ipListAll = [
-    '172.64.151.241', '172.64.153.2', '104.18.39.123', '104.18.42.218', '172.64.154.125', '104.18.36.15', '172.64.145.202', '172.64.149.99',
-    '104.18.33.131', '172.64.145.93', '172.64.151.221', '104.18.36.35', '172.64.145.18', '172.64.145.38', '104.18.34.254', '104.18.42.163'
-];
+const ipListAll = ["172.64.154.125","104.18.39.123","172.64.145.18","104.18.42.218","104.18.33.131","172.64.145.38","172.64.145.202","104.18.42.151"];
 const coloRegions = {
     JP: new Set(['FUK', 'ICN', 'KIX', 'NRT', 'OKA']),
     EU: new Set([
@@ -540,8 +537,8 @@ const establishTcpConnection = async (parsedRequest, request) => {
             wasmMem.set(urlBytes, dataPtr);
             parseUrlWasm(urlBytes.length);
             const r = wasmRes;
-            const s5Val = getUrlParam(r[13], r[14]), httpVal = getUrlParam(r[15], r[16]), nat64Val = getUrlParam(r[17], r[18]), turnVal = getUrlParam(r[22], r[23]), ipVal = getUrlParam(r[19], r[20]);
-            const proxyAll = r[21] === 1;
+            const s5Val = getUrlParam(r[15], r[16]), httpVal = getUrlParam(r[17], r[18]), nat64Val = getUrlParam(r[19], r[20]), turnVal = getUrlParam(r[24], r[25]), ipVal = getUrlParam(r[21], r[22]);
+            const proxyAll = r[23] === 1;
             !proxyAll && list.push({type: 0});
             const add = (v, t) => {
                 if (!v) return;
@@ -619,8 +616,9 @@ const handleSession = async (chunk, state, request, writable, close) => {
             state.socks5State = nextState;
             return;
         }
-        return close();
+        return r[14] === 1 ? (state.needMore = true) : close();
     }
+    state.needMore = false;
     const parsedRequest = {addrType: r[5], port: r[6], dataOffset: r[7], isDns: r[8] === 1, addrBytes: chunk.subarray(r[9], r[9] + r[10]), isHttp: r[11] === 3};
     const payload = chunk.subarray(parsedRequest.dataOffset);
     if (parsedRequest.isDns) {
@@ -653,8 +651,7 @@ const handleWebSocketConn = async (webSocket, request) => {
 };
 const grpcHeaders = {'Content-Type': 'application/grpc', 'X-Accel-Buffering': 'no', 'Cache-Control': 'no-store'};
 const xhttpHeaders = {'Content-Type': 'application/octet-stream', 'grpc-status': '0', 'X-Accel-Buffering': 'no', 'Cache-Control': 'no-store'};
-const handleGrpcPost = async (request) => {
-    const reader = request.body.getReader({mode: 'byob'});
+const handleGrpcPost = async (request, reader, buffer, used) => {
     const state = {socks5State: 0, tcpWriter: null, tcpSocket: null};
     return new Response(new ReadableStream({
         start(controller) {
@@ -684,12 +681,10 @@ const handleGrpcPost = async (request) => {
             };
             const close = () => {reader.releaseLock(), state.tcpSocket?.close(), controller.close()};
             (async () => {
-                let grpcBuffer = new ArrayBuffer(131072), used = 0, offset = 0;
+                let grpcBuffer = new ArrayBuffer(73728), offset = 0;
+                if (used) new Uint8Array(grpcBuffer, 0, used).set(buffer);
                 while (true) {
-                    const {done, value} = await reader.read(new Uint8Array(grpcBuffer, used, 65536));
-                    if (done) break;
-                    grpcBuffer = value.buffer;
-                    const bufToProcess = new Uint8Array(grpcBuffer, 0, used + value.byteLength), bufLen = bufToProcess.byteLength;
+                    const bufToProcess = new Uint8Array(grpcBuffer, 0, used), bufLen = bufToProcess.byteLength;
                     offset = 0;
                     while (bufLen - offset >= 5) {
                         const grpcLen = ((bufToProcess[offset + 1] << 24) >>> 0) | (bufToProcess[offset + 2] << 16) | (bufToProcess[offset + 3] << 8) | bufToProcess[offset + 4];
@@ -707,34 +702,36 @@ const handleGrpcPost = async (request) => {
                         used = bufLen - offset;
                         new Uint8Array(grpcBuffer).copyWithin(0, offset, bufLen);
                     } else {used = 0}
+                    const {done, value} = await reader.read(new Uint8Array(grpcBuffer, used, 8192));
+                    if (done) break;
+                    grpcBuffer = value.buffer;
+                    used += value.byteLength;
                 }
             })().finally(() => close());
         },
         cancel() {state.tcpSocket?.close(), reader.releaseLock()}
     }), {headers: grpcHeaders});
 };
-const handleXhttpPost = async (request) => {
-    const reader = request.body.getReader({mode: 'byob'});
-    const state = {socks5State: 0, tcpWriter: null, tcpSocket: null};
+const handleXhttpPost = async (request, reader, xhttpBuffer, used) => {
+    const state = {socks5State: 0, tcpWriter: null, tcpSocket: null, needMore: false};
     return new Response(new ReadableStream({
         start(controller) {
             const writable = {send: (chunk) => controller.enqueue(chunk)};
             const close = () => {reader.releaseLock(), state.tcpSocket?.close(), controller.close()};
             (async () => {
-                let xhttpBuffer = new ArrayBuffer(65536), used = 0, offset = 0;
                 while (true) {
-                    offset = used;
-                    const {done, value} = await reader.read(new Uint8Array(xhttpBuffer, offset, offset === 0 ? 65536 : 32768));
+                    if (used > 0) {
+                        const payload = new Uint8Array(xhttpBuffer, 0, used);
+                        state.tcpWriter ? state.tcpWriter(payload) : (state.needMore = false, await handleSession(payload, state, request, writable, close));
+                        if (!state.needMore) {
+                            used = 0;
+                            continue;
+                        }
+                    }
+                    const {done, value} = await reader.read(new Uint8Array(xhttpBuffer, used, used === 0 ? 8192 : 4096));
                     if (done) break;
                     xhttpBuffer = value.buffer;
                     used += value.byteLength;
-                    const payload = new Uint8Array(xhttpBuffer, 0, used);
-                    if (state.tcpWriter) {
-                        state.tcpWriter(payload);
-                    } else if (payload[0] === 5 || state.socks5State || used >= 32) {
-                        await handleSession(payload, state, request, writable, close);
-                    } else {continue}
-                    used = 0;
                 }
             })().finally(() => close());
         },
@@ -810,11 +807,26 @@ export default {
     async fetch(request, env) {
         if (!isInitialized) initializeWasm(env);
         if (request.method === 'POST' && request.headers.get('content-type') === 'application/grpc-web') {
-            return (request.headers.get('Referer') || '').includes('x_padding', 14) ? handleXhttpPost(request) : handleGrpcPost(request);
+            const reader = request.body?.getReader({mode: 'byob'});
+            if (!reader) return new Response(null, {status: 400});
+            let postBuffer = new ArrayBuffer(8192), used = 0, buffer = new Uint8Array();
+            while (buffer.length === 0 || (buffer[0] === 0 && buffer.length < 6)) {
+                const {done, value} = await reader.read(new Uint8Array(postBuffer, used, 4096));
+                if (done || !value?.byteLength) break;
+                postBuffer = value.buffer;
+                used += value.byteLength;
+                buffer = new Uint8Array(postBuffer, 0, used);
+            }
+            if (buffer.length === 0) {
+                reader.releaseLock();
+                return new Response(null, {status: 400});
+            }
+            const isGrpc = !request.headers.get('Referer') && buffer.length >= 6 && buffer[0] === 0 && buffer[5] === 0x0A;
+            return isGrpc ? handleGrpcPost(request, reader, buffer, used) : handleXhttpPost(request, reader, postBuffer, used);
         }
         if (request.headers.get('Upgrade') === 'websocket') {
             const {0: clientSocket, 1: webSocket} = new WebSocketPair();
-            webSocket.accept(), webSocket.binaryType = "arraybuffer";
+            webSocket.accept({allowHalfOpen: true}), webSocket.binaryType = "arraybuffer";
             handleWebSocketConn(webSocket, request);
             return new Response(null, {status: 101, webSocket: clientSocket});
         }
