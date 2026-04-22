@@ -126,7 +126,7 @@ rustup target add wasm32-unknown-unknown
 
 ```bash
 # Release 构建为 wasm
-cargo build --release --target wasm32-unknown-unknown
+cargo build --release
 ```
 
 构建成功后，Rust 会在：
@@ -161,7 +161,7 @@ import wasmModule from './protocol.wasm';
 在必要时，可使用 `binaryen` / `wasm-opt` 等工具对 `protocol.wasm` 做进一步体积优化，例如：
 
 ```bash
-wasm-opt -Oz -o protocol.opt.wasm protocol.wasm
+wasm-opt -O4 --enable-bulk-memory --enable-simd --strip-debug --strip-producers target\wasm32-unknown-unknown\release\protocol_parser.wasm -o protocol.wasm
 mv protocol.opt.wasm protocol.wasm
 ```
 

@@ -30,6 +30,7 @@ const urlParamCacheLimit = 20;//URL参数解析结果缓存条数
 // ---------------------------------------------------------------------------------
 //四者的socket获取顺序，全局模式下为这四个的顺序，非全局为：直连>socks>http>turn>nat64>proxyip>finallyProxyHost
 const proxyStrategyOrder = ['socks', 'http', 'turn', 'nat64'];
+const sharedEchDns = 'cloudflare-ech.com+https://223.5.5.5/dns-query'; //ECHDNS配置
 const dohEndpoints = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query'];
 const dohNatEndpoints = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve'];
 const proxyIpAddrs = {EU: 'ProxyIP.DE.CMLiussss.net', AS: 'ProxyIP.SG.CMLiussss.net', JP: 'ProxyIP.JP.CMLiussss.net', US: 'ProxyIP.US.CMLiussss.net'};//分区域proxyip
@@ -124,7 +125,8 @@ const initializeWasm = (env) => {
     for (let i = 0; i < 12; i++) {
         const len = getTemplateWasm(i);
         const tmpl = textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
-        cachedTemplates[i] = i < 6 ? tmpl.replaceAll("{{UUID}}", subUuid) : tmpl.replaceAll("{{PASSWORD}}", subPassword);
+        const baseTmpl = tmpl.replaceAll("{{ECHDNS}}", encodeURIComponent(sharedEchDns));
+        cachedTemplates[i] = i < 6 ? baseTmpl.replaceAll("{{UUID}}", subUuid) : baseTmpl.replaceAll("{{PASSWORD}}", subPassword);
     }
     isInitialized = true;
 };
@@ -836,8 +838,8 @@ export default {
         if (url.pathname === `/${uuid}` || url.pathname === `/${password}`) {
             if (!rawHtml) {
                 rawHtml = await decompressWasm(getPanelHtmlPtr, getPanelHtmlLen);
-                const map = {UUID: uuid, PASS: password, HTTPPASS: `${user}:${pass}`, IPLIST: JSON.stringify(ipListAll)};
-                rawHtml = rawHtml.replace(/{{(UUID|PASS|HTTPPASS|IPLIST)}}/g, (_, k) => map[k]);
+                const map = {UUID: uuid, PASS: password, HTTPPASS: `${user}:${pass}`, IPLIST: JSON.stringify(ipListAll), ECHDNS: encodeURIComponent(sharedEchDns)};
+                rawHtml = rawHtml.replace(/{{(UUID|PASS|HTTPPASS|IPLIST|ECHDNS)}}/g, (_, k) => map[k]);
             }
             return new Response(rawHtml, {headers: {'Content-Type': 'text/html; charset=UTF-8'}});
         }
