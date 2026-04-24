@@ -582,35 +582,49 @@ const establishTcpConnection = async (parsedRequest, request) => {
     return null;
 };
 const manualPipe = async (readable, writable) => {
-    const _bufferSize = bufferSize, _maxChunkLen = maxChunkLen, _startThreshold = startThreshold, _flushTime = flushTime, _safeBufferSize = _bufferSize - _maxChunkLen;
-    let mainBuf = new ArrayBuffer(_bufferSize), offset = 0, timerId = null, resume = null, isReading = false, needsFlush = false, totalBytes = 0;
-    const flush = () => {
-        if (isReading) return needsFlush = true;
-        offset > 0 && (writable.send(mainBuf.slice(0, offset)), offset = 0);
-        needsFlush = false, timerId && (clearTimeout(timerId), timerId = null), resume?.(), resume = null;
+    const safeBufferSize = bufferSize - maxChunkLen;
+    let buffer = new Uint8Array(bufferSize), chunkBuf = new ArrayBuffer(maxChunkLen);
+    let offset = 0, totalBytes = 0, timerId = null, resume = null, dynamicLowerBound = 4096;
+    let globalBytes = [0, 0, 0, 0, 0, 0, 0], lowerBounds = [0, 512, 1024, 2048, 4096, 8192, 24576];
+    const flushBuffer = () => {
+        offset > 0 && (writable.send(buffer.slice(0, offset)), offset = 0);
+        timerId && (clearTimeout(timerId), timerId = null), resume?.(), resume = null;
     };
     const reader = readable.getReader({mode: 'byob'});
     try {
         while (true) {
-            isReading = true;
-            const {done, value} = await reader.read(new Uint8Array(mainBuf, offset, _maxChunkLen));
-            if (isReading = false, done) break;
-            mainBuf = value.buffer;
+            const {done, value} = await reader.read(new Uint8Array(chunkBuf));
+            if (done) break;
+            chunkBuf = value.buffer;
             const chunkLen = value.byteLength;
-            if (chunkLen < _maxChunkLen) {
-                chunkLen < 4096 && (totalBytes = 0);
-                offset > 0 ? (offset += chunkLen, flush()) : writable.send(value.slice());
+            let idx = 6;
+            if (chunkLen < 512) idx = 0;
+            else if (chunkLen < 1024) idx = 1;
+            else if (chunkLen < 2048) idx = 2;
+            else if (chunkLen < 4096) idx = 3;
+            else if (chunkLen < 8192) idx = 4;
+            else if (chunkLen < 24576) idx = 5;
+            globalBytes[idx] += chunkLen;
+            let maxIdx = 0;
+            for (let i = 1; i < 7; i++) {
+                if (globalBytes[i] > globalBytes[maxIdx]) maxIdx = i;
+            }
+            if (globalBytes[maxIdx] > 0) dynamicLowerBound = lowerBounds[maxIdx];
+            if (chunkLen < 512) {
+                flushBuffer(), writable.send(value.slice());
             } else {
-                offset += chunkLen, totalBytes += chunkLen, needsFlush && flush();
-                if (totalBytes < _startThreshold) {
-                    offset > _safeBufferSize && flush();
+                chunkLen < dynamicLowerBound && (totalBytes = 0);
+                buffer.set(value, offset);
+                offset += chunkLen, totalBytes += chunkLen;
+                timerId ||= setTimeout(flushBuffer, flushTime);
+                if (totalBytes < startThreshold) {
+                    offset > safeBufferSize && flushBuffer();
                 } else {
-                    timerId ||= setTimeout(flush, _flushTime);
-                    offset > _safeBufferSize && (await new Promise(r => resume = r));
+                    offset > safeBufferSize && (await new Promise(r => resume = r));
                 }
             }
         }
-    } finally {isReading = false, flush(), reader.releaseLock()}
+    } finally {flushBuffer(), reader.releaseLock()}
 };
 const handleSession = async (chunk, state, request, writable, close) => {
     const parseLen = Math.min(chunk.length, 1024);
