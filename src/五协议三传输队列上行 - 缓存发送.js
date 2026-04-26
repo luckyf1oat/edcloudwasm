@@ -885,12 +885,14 @@ const manualPipe = async (readable, writable) => {
     } finally {flushBuffer(), reader.releaseLock()}
 };
 const pipeWithSsAead = async (readable, writable, ssOutCtx, salt) => {
-    const reader = readable.getReader();
+    const reader = readable.getReader({mode: 'byob'});
+    let chunkBuf = new ArrayBuffer(maxChunkLen);
     try {
         if (salt?.length) writable.send(salt);
         while (true) {
-            const {done, value} = await reader.read();
+            const {done, value} = await reader.read(new Uint8Array(chunkBuf));
             if (done) break;
+            chunkBuf = value.buffer;
             if (!value?.byteLength) continue;
             const encrypted = await ssAeadEncryptChunks(ssOutCtx, value instanceof Uint8Array ? value : new Uint8Array(value));
             if (encrypted.byteLength) writable.send(encrypted);
