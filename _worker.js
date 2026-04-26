@@ -28,8 +28,8 @@ let concurrency = 4;//socket获取并发数
 // ---------------------------------------------------------------------------------
 const urlParamCacheLimit = 20;//URL参数解析结果缓存条数
 // ---------------------------------------------------------------------------------
-//四者的socket获取顺序，全局模式下为这四个的顺序，非全局为：直连>socks>http>turn>nat64>proxyip>finallyProxyHost
-const proxyStrategyOrder = ['socks', 'http', 'turn', 'nat64'];
+//五者的socket获取顺序，全局模式下为这五个的顺序，非全局为：直连>socks>http>https>turn>nat64>proxyip>finallyProxyHost
+const proxyStrategyOrder = ['socks', 'http', 'https', 'turn', 'nat64'];
 const sharedEchDns = 'cloudflare-ech.com+https://223.5.5.5/dns-query'; //ECHDNS配置
 const dohEndpoints = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query'];
 const dohNatEndpoints = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve'];
@@ -57,7 +57,7 @@ import wasmModule from './protocol.wasm';
 const instance = new WebAssembly.Instance(wasmModule);
 const {
     memory, getUuidPtr, getResultPtr, getDataPtr, getHttpAuthPtr, getSocks5AuthPtr, setHttpAuthLenWasm, setSocks5AuthLenWasm, parseProtocolWasm, parseUrlWasm,
-    initCredentialsWasm, getPanelHtmlPtr, getPanelHtmlLen, getErrorHtmlPtr, getErrorHtmlLen, getCorrectAddrTypeWasm, getTemplateWasm, getSecretStringWasm, initWasm
+    initCredentialsWasm, getPanelHtmlPtr, getPanelHtmlLen, getErrorHtmlPtr, getErrorHtmlLen, getCorrectAddrTypeWasm, getTemplateWasm, getSecretStringWasm
 } = instance.exports;
 const wasmMem = new Uint8Array(memory.buffer);
 const wasmRes = new Int32Array(memory.buffer, getResultPtr(), 32);
@@ -83,7 +83,6 @@ const getEnv = (env) => {
     return config;
 };
 const initializeWasm = (env) => {
-    initWasm((1024 >> 4) + 26);
     const {uuid, password, user, pass} = getEnv(env);
     const cleanUuid = uuid.replace(/-/g, "");
     if (cleanUuid.length === 32) {
@@ -176,10 +175,10 @@ const parseAuthString = (authParam) => {
     const [hostname, port] = parseHostPort(hostStr, 1080);
     return {username, password, hostname, port};
 };
-const createConnect = (hostname, port, socket = connect({hostname, port})) => socket.opened.then(() => socket);
-const concurrentConnect = (hostname, port, limit = concurrency) => {
-    if (limit === 1) return createConnect(hostname, port);
-    return Promise.any(Array(limit).fill(null).map(() => createConnect(hostname, port)));
+const createConnect = (hostname, port, socketOptions, socket = connect({hostname, port}, socketOptions)) => socket.opened.then(() => socket);
+const concurrentConnect = (hostname, port, limit = concurrency, socketOptions) => {
+    if (limit === 1) return createConnect(hostname, port, socketOptions);
+    return Promise.any(Array(limit).fill(null).map(() => createConnect(hostname, port, socketOptions)));
 };
 const connectViaSocksProxy = async (targetAddrType, targetPortNum, socksAuth, addrBytes, limit) => {
     const socksSocket = await concurrentConnect(socksAuth.hostname, socksAuth.port, limit);
@@ -210,9 +209,10 @@ const connectViaSocksProxy = async (targetAddrType, targetPortNum, socksAuth, ad
 };
 const staticHeaders = `User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36\r\nProxy-Connection: Keep-Alive\r\nConnection: Keep-Alive\r\n\r\n`;
 const encodedStaticHeaders = textEncoder.encode(staticHeaders);
-const connectViaHttpProxy = async (targetAddrType, targetPortNum, httpAuth, addrBytes, limit) => {
+const connectViaHttpProxy = async (targetAddrType, targetPortNum, httpAuth, addrBytes, limit, useTls = false) => {
     const {username, password, hostname, port} = httpAuth;
-    const proxySocket = await concurrentConnect(hostname, port, limit);
+    const connectOptions = useTls ? {secureTransport: 'on', allowHalfOpen: false} : undefined;
+    const proxySocket = await concurrentConnect(hostname, port, limit, connectOptions);
     const writer = proxySocket.writable.getWriter();
     const httpHost = binaryAddrToString(targetAddrType, addrBytes);
     let dynamicHeaders = `CONNECT ${httpHost}:${targetPortNum} HTTP/1.1\r\nHost: ${httpHost}:${targetPortNum}\r\n`;
@@ -491,6 +491,9 @@ const strategyExecutorMap = new Map([
     [2, async ({addrType, port, addrBytes}, param, limit) => {
         return connectViaHttpProxy(addrType, port, param, addrBytes, limit);
     }],
+    [6, async ({addrType, port, addrBytes}, param, limit) => {
+        return connectViaHttpProxy(addrType, port, param, addrBytes, limit, true);
+    }],
     [3, async (_parsedRequest, param, limit) => {
         return connectProxyIp(param, limit);
     }],
@@ -539,7 +542,7 @@ const establishTcpConnection = async (parsedRequest, request) => {
             wasmMem.set(urlBytes, dataPtr);
             parseUrlWasm(urlBytes.length);
             const r = wasmRes;
-            const s5Val = getUrlParam(r[15], r[16]), httpVal = getUrlParam(r[17], r[18]), nat64Val = getUrlParam(r[19], r[20]), turnVal = getUrlParam(r[24], r[25]), ipVal = getUrlParam(r[21], r[22]);
+            const s5Val = getUrlParam(r[15], r[16]), httpVal = getUrlParam(r[17], r[18]), nat64Val = getUrlParam(r[19], r[20]), turnVal = getUrlParam(r[24], r[25]), ipVal = getUrlParam(r[21], r[22]), httpsVal = getUrlParam(r[26], r[27]);
             const proxyAll = r[23] === 1;
             !proxyAll && list.push({type: 0});
             const add = (v, t) => {
@@ -548,13 +551,13 @@ const establishTcpConnection = async (parsedRequest, request) => {
                 if (parts.length) {
                     const parsedParams = parts.map(part => {
                         if (t === 4) return {nat64Auth: part, proxyAll};
-                        if (t === 1 || t === 2 || t === 5) return parseAuthString(part);
+                        if (t === 1 || t === 2 || t === 5 || t === 6) return parseAuthString(part);
                         return part;
                     });
                     list.push({type: t, param: parsedParams, concurrent: true});
                 }
             };
-            for (const k of proxyStrategyOrder) k === 'socks' ? add(s5Val, 1) : k === 'http' ? add(httpVal, 2) : k === 'turn' ? add(turnVal, 5) : add(nat64Val, 4);
+            for (const k of proxyStrategyOrder) k === 'socks' ? add(s5Val, 1) : k === 'http' ? add(httpVal, 2) : k === 'https' ? add(httpsVal, 6) : k === 'turn' ? add(turnVal, 5) : add(nat64Val, 4);
             if (proxyAll) {
                 !list.length && list.push({type: 0});
             } else {
@@ -578,32 +581,60 @@ const establishTcpConnection = async (parsedRequest, request) => {
     }
     return null;
 };
+const chunkIdxLookup = new Uint8Array(257);
+for (let i = 0; i <= 256; i++) {
+    let len = i << 8;
+    if (len < 512) chunkIdxLookup[i] = 0;
+    else if (len < 1024) chunkIdxLookup[i] = 1;
+    else if (len < 2048) chunkIdxLookup[i] = 2;
+    else if (len < 3072) chunkIdxLookup[i] = 3;
+    else if (len < 4096) chunkIdxLookup[i] = 4;
+    else if (len < 6144) chunkIdxLookup[i] = 5;
+    else if (len < 8192) chunkIdxLookup[i] = 6;
+    else if (len < 12288) chunkIdxLookup[i] = 7;
+    else if (len < 20480) chunkIdxLookup[i] = 8;
+    else if (len < 30720) chunkIdxLookup[i] = 9;
+    else chunkIdxLookup[i] = 10;
+}
+const lowerBounds = new Uint16Array([256, 512, 1024, 2048, 3072, 4096, 6144, 8192, 12288, 20480, 28672]);
 const manualPipe = async (readable, writable) => {
-    const _bufferSize = bufferSize, _maxChunkLen = maxChunkLen, _startThreshold = startThreshold, _flushTime = flushTime, _safeBufferSize = _bufferSize - _maxChunkLen;
-    let mainBuf = new ArrayBuffer(_bufferSize), offset = 0, time = 2, timerId = null, resume = null, isReading = false, needsFlush = false, totalBytes = 0;
-    const flush = () => {
-        if (isReading) return needsFlush = true;
-        offset > 0 && (writable.send(mainBuf.slice(0, offset)), offset = 0);
-        needsFlush = false, timerId && (clearTimeout(timerId), timerId = null), resume?.(), resume = null;
+    const safeBufferSize = bufferSize - maxChunkLen;
+    let buffer = new Uint8Array(bufferSize + 512), chunkBuf = new ArrayBuffer(maxChunkLen);
+    let offset = 0, totalBytes = 0, timerId = null, resume = null, dynamicLowerBound = 4096;
+    let globalBytes = new Float64Array(11), currentMaxIdx = 4, statBytes = 0;
+    const flushBuffer = () => {
+        offset > 0 && (writable.send(buffer.slice(0, offset)), offset = 0);
+        timerId && (clearTimeout(timerId), timerId = null), resume?.(), resume = null;
     };
     const reader = readable.getReader({mode: 'byob'});
     try {
         while (true) {
-            isReading = true;
-            const {done, value} = await reader.read(new Uint8Array(mainBuf, offset, _maxChunkLen));
-            if (isReading = false, done) break;
-            mainBuf = value.buffer;
-            const chunkLen = value.byteLength;
-            if (chunkLen < _maxChunkLen) {
-                time = 2, chunkLen < 4096 && (totalBytes = 0);
-                offset > 0 ? (offset += chunkLen, flush()) : writable.send(value.slice());
+            const {done, value} = await reader.read(new Uint8Array(chunkBuf));
+            if (done) break;
+            chunkBuf = value.buffer;
+            const chunkLen = value.byteLength, idx = chunkIdxLookup[chunkLen >> 8];
+            globalBytes[idx] += chunkLen, statBytes += chunkLen;
+            globalBytes[idx] > globalBytes[currentMaxIdx] && (currentMaxIdx = idx, dynamicLowerBound = lowerBounds[idx]);
+            if (statBytes > 524288000) {
+                statBytes = 0;
+                let newMaxIdx = 0;
+                for (let i = 0; i < 11; i++) (globalBytes[i] /= 2) > globalBytes[newMaxIdx] && (newMaxIdx = i);
+                currentMaxIdx = newMaxIdx, dynamicLowerBound = lowerBounds[newMaxIdx];
+            }
+            if (chunkLen < 512) {
+                offset > 0 ? (buffer.set(value, offset), offset += chunkLen, flushBuffer()) : writable.send(value.slice());
             } else {
-                totalBytes += chunkLen;
-                offset += chunkLen, timerId ||= setTimeout(flush, time), needsFlush && flush();
-                offset > _safeBufferSize && (totalBytes > _startThreshold && (time = _flushTime), await new Promise(r => resume = r));
+                chunkLen < dynamicLowerBound && (totalBytes = 0);
+                buffer.set(value, offset), offset += chunkLen, totalBytes += chunkLen;
+                timerId ||= setTimeout(flushBuffer, flushTime);
+                if (totalBytes < startThreshold) {
+                    offset > safeBufferSize && flushBuffer();
+                } else {
+                    offset > safeBufferSize && (await new Promise(r => resume = r));
+                }
             }
         }
-    } finally {isReading = false, flush(), reader.releaseLock()}
+    } finally {flushBuffer(), reader.releaseLock()}
 };
 const handleSession = async (chunk, state, request, writable, close) => {
     const parseLen = Math.min(chunk.length, 1024);
