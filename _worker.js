@@ -601,7 +601,7 @@ const manualPipe = async (readable, writable) => {
     const safeBufferSize = bufferSize - maxChunkLen;
     let buffer = new Uint8Array(bufferSize + 512), chunkBuf = new ArrayBuffer(maxChunkLen);
     let offset = 0, totalBytes = 0, timerId = null, resume = null, dynamicLowerBound = 4096;
-    let globalBytes = new Float64Array(11), currentMaxIdx = 4, statBytes = 0;
+    let globalBytes = new Float64Array(11), statBytes = 0;
     const flushBuffer = () => {
         offset > 0 && (writable.send(buffer.slice(0, offset)), offset = 0);
         timerId && (clearTimeout(timerId), timerId = null), resume?.(), resume = null;
@@ -614,13 +614,20 @@ const manualPipe = async (readable, writable) => {
             chunkBuf = value.buffer;
             const chunkLen = value.byteLength, idx = chunkIdxLookup[chunkLen >> 8];
             globalBytes[idx] += chunkLen, statBytes += chunkLen;
-            globalBytes[idx] > globalBytes[currentMaxIdx] && (currentMaxIdx = idx, dynamicLowerBound = lowerBounds[idx]);
             if (statBytes > 524288000) {
                 statBytes = 0;
-                let newMaxIdx = 0;
-                for (let i = 0; i < 11; i++) (globalBytes[i] /= 2) > globalBytes[newMaxIdx] && (newMaxIdx = i);
-                currentMaxIdx = newMaxIdx, dynamicLowerBound = lowerBounds[newMaxIdx];
+                for (let i = 0; i < 11; i++) globalBytes[i] /= 2;
             }
+            let maxBytes = globalBytes[0], maxIdx = 0;
+            for (let i = 1; i < 11; i++) {
+                const currentBytes = globalBytes[i];
+                currentBytes > maxBytes && (maxBytes = currentBytes, maxIdx = i);
+            }
+            dynamicLowerBound = lowerBounds[
+                maxIdx > 1 && globalBytes[maxIdx - 2] * 10 >= maxBytes * 8 ? maxIdx - 2 :
+                    maxIdx > 0 && globalBytes[maxIdx - 1] * 10 >= maxBytes * 9 ? maxIdx - 1 :
+                        maxIdx
+                ];
             if (chunkLen < 512) {
                 offset > 0 ? (buffer.set(value, offset), offset += chunkLen, flushBuffer()) : writable.send(value.slice());
             } else {
