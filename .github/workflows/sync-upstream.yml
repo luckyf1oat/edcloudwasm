@@ -1,0 +1,49 @@
+name: Sync Upstream & Keep Config
+
+on:
+  schedule:
+    - cron: '0 3 * * *'      # 每天 03:00 UTC = 北京 11:00
+  workflow_dispatch:          # 仓库 Actions 页可手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Merge upstream
+        run: |
+          git config user.name "luckyf1oat"
+          git config user.email "luckyf1oat@users.noreply.github.com"
+          git remote add upstream https://github.com/1345695/edcloudwasm.git
+          git fetch upstream
+          # 先保存我的配置
+          cp wrangler.toml /tmp/my_wrangler.toml
+          # 合并上游(冲突时以上游代码为准 — 我的自定义只在 wrangler.toml)
+          git merge upstream/main --strategy-option=theirs --no-edit || true
+
+      - name: Restore my config values
+        run: |
+          python3 - <<'EOF'
+          import re
+          mine = open('/tmp/my_wrangler.toml').read()
+          vals = {}
+          for key in ['UUID', 'PASSWORD', 'SSPASS', 'S5HTTPUSER', 'S5HTTPPASS']:
+              m = re.search(rf'^{key}\s*=\s*"([^"]*)"', mine, re.M)
+              if m:
+                  vals[key] = m.group(1)
+          cur = open('wrangler.toml').read()
+          for key, val in vals.items():
+              cur = re.sub(rf'^{key}\s*=\s*"[^"]*"', f'{key} = "{val}"', cur, flags=re.M)
+          open('wrangler.toml', 'w').write(cur)
+          print('恢复配置:', vals)
+          EOF
+
+      - name: Commit & push
+        run: |
+          git add -A
+          git commit -m "sync: upstream update + keep own config" || echo "no changes to commit"
+          git push
