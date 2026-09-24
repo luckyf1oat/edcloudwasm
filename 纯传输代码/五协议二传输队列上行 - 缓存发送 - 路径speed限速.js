@@ -1,11 +1,35 @@
-// 代码基本都抄的CM和AK大佬和天书大佬的项目，在此感谢各位大佬的无私奉献。
+/*
+// 代码基本都抄的CM和和AK大佬和天书大佬的项目，在此感谢各位大佬的无私奉献。
+// 支持xhttp和websocket，trojan和vless和ss和socks5和http协议入站,ss协议无密码，ss和socks5和http协议只能纯手搓，socks5协议不能在路径使用ed=2560参数
+// ws模式的vless导入链接：vless://{这里写uuid}@104.16.40.11:2053?encryption=none&security=tls&sni={这里写域名}&alpn=http%2F1.1&fp=chrome&type=ws&host={这里写域名}#vless
+// ws模式的trojan导入链接：trojan://{这里写密码}@104.16.40.11:2053?security=tls&sni={这里写域名}&alpn=http%2F1.1&fp=chrome&allowInsecure=1&type=ws&host={这里写域名}#trojan
+// xhttp模式的vless导入链接：vless://{这里写uuid}@104.16.40.11:2053?encryption=none&security=tls&sni={这里写域名}&alpn=h2&fp=chrome&allowInsecure=1&type=xhttp&host={这里写域名}&mode=stream-one#vless-xhttp
+// xhttp模式的trojan导入链接：trojan://passwd@104.16.40.11:2053?security=tls&sni=sni&alpn=h2&fp=chrome&allowInsecure=1&type=xhttp&host=host&path=%2F&mode=stream-one#trojan-xhttp
+// 复制协议开头的导入链接导入再手动修改即可
+ * ========================== URL路径参数速查表 =================================================================================
+ * 多个参数用 & 连接, 示例: /?s5=host:port&ip=1.2.3.4:443   注: s5/http/https/sstp/turn/turns/nat64/ip 均支持逗号分隔多个地址以实现并发连接
+ * s5/gs5/socks/s5all         - 直连失败SOCKS5代理 / 全局SOCKS5        示例: s5=user1:pass1@host1:port1,user2:pass2@host2:port2
+ * http/ghttp/httpall         - 直连失败HTTP代理 / 全局HTTP            示例: http=user1:pass1@host1:port1,user2:pass2@host2:port2
+ * https/ghttps/httpsall      - 直连失败HTTPS代理 / 全局HTTPS          示例: https=user1:pass1@host1:port1,user2:pass2@host2:port2
+ * nat64/gnat64/nat64all      - 直连失败NAT64转换 / 全局NAT64          示例: nat64=64:ff9b::,64:ff9b:1::
+ * turn/gturn/turnall         - 直连失败TURN代理 / 全局TURN            示例: turn=user1:pass1@host1:port1,user2:pass2@host2:port2
+ * turns/gturns/turnsall      - 直连失败TURNS代理 / 全局TURNS          示例: turns=user1:pass1@host1:port1,user2:pass2@host2:port2
+ * sstp/gsstp/sstpall         - 直连失败SSTP代理 / 全局SSTP            示例: sstp=user1:pass1@host1:443,user2:pass2@host2:443
+ * ip/txtip/proxyip           - 直连失败时的备用IP                     示例: ip=1.2.3.4:443,5.6.7.8:443
+ * proxyall/globalproxy/global - 全局代理标志,无s5/http/https参数时纯直连 示例: proxyall=1
+ * speed                      - 下行限速,单位默认MB/s，大于256时解除限速  示例: speed=50 表示50MB/s
+ * ==========================================================================================================================*/
 import {connect} from 'cloudflare:sockets';
-import {TlsClient} from './TlsClient.js';
-const defaultUuid = ''; // 可在环境变量配置，变量名称为UUID，两个地方都不写为不验证uuid
-const defaultPassword = ''; // 可在环境变量配置，变量名称为PASSWORD，两个地方都不写为不验证密码
-const socks5AndHttpUser = ''; // 可在环境变量配置，变量名称为S5HTTPUSER，两个地方都不写为不验证密码
-const socks5AndHttpPass = ''; // 可在环境变量配置，变量名称为S5HTTPPASS，两个地方都不写为不验证密码
-const ssAeadPassword = ''; // 可在环境变量配置，变量名称为SSPASS
+//**警告**:不看开头注释直接把域名地址扔浏览器里会收获彩蛋一枚
+const uuid = 'd342d11e-d424-4583-b36e-524ab1f0afa4';//vless使用的uuid
+//**警告**:trojan使用的sha224密钥，需要自己计算，当前设置为密码666的密钥
+//**警告**:trojan使用的sha224密钥，需要自己计算，当前设置为密码666的密钥
+//**警告**:trojan使用的sha224密钥，需要自己计算，当前设置为密码666的密钥
+//**警告**:trojan使用的sha224密钥计算网址：https://www.lzltool.com/data-sha224
+const passWordSha224 = '509eece82eb6910bebef9af9496092d3244b6c0d69ef3aaa4b12c565';
+const socks5AndHttpUser = 'admin';     //socsk5和http协议用户名，设置为空即为无密码验证，需要客户端也为空
+const socks5AndHttpPass = '123456';    //socsk5和http协议密码，设置为空即为无密码验证，需要客户端也为空
+const ssAeadPassword = '123456';       // ss协议 aes-128-gcm 密码（notls）
 // ---------------------------------------------------------------------------------
 // 理论最低带宽计算公式 (Theoretical Max Bandwidth Calculation):
 //    - 速度上限 (Mbps) = (bufferSize (字节) / flushTime (毫秒)) * 0.008
@@ -23,25 +47,24 @@ const startThreshold = 50 * 1024 * 1024; //50MB
 /**- **警告**: 免费worker设置64KB时传输相同流量cpu开销最低。*/
 const maxChunkLen = 64 * 1024;        // 64KB
 /** 进入缓冲模式时的缓冲区发送的触发时间。*/
-const flushTime = 4;                 // 4ms
+const flushTime = 4;                  // 4ms
 // ---------------------------------------------------------------------------------
 /** SS AEAD加密时每批并发处理的payload分片数量，length加密开销低，会随payload一起提交。*/
 const ssAeadEncryptCount = 16;
 // ---------------------------------------------------------------------------------
-/**- **警告**: worker最大支持6，超过6没意义*/
+/** TCPsocket并发获取，可提高tcp连接成功率*/
+/**- **警告**: snippets只能设置为1，worker最大支持6，超过6没意义*/
 let concurrency = 4;//socket获取并发数
 const enableSniSniff = false;//域名嗅探开关(支持ss vless trojan)
 // ---------------------------------------------------------------------------------
 const urlParamCacheLimit = 20;//URL参数解析结果缓存条数
 // ---------------------------------------------------------------------------------
 //出站socket获取顺序，全局模式下按数组顺序，非全局为：直连>socks>http>https>sstp>turn>turns>nat64>proxyip>finallyProxyHost
+/**- **警告**: snippets只支持最大两次connect，所以snippets全局nat64不能使用域名访问，snippets访问cf失败的备用只有第一个有效*/
 const proxyStrategyOrder = ['socks', 'http', 'https', 'sstp', 'turn', 'turns', 'nat64'];
-const sharedEchDns = 'lido.fi+https://223.5.5.5/dns-query'; //ECHDNS配置
 const dohEndpoints = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query'];
 const dohNatEndpoints = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve'];
 const finallyProxyHost = 'proxy.zjcloud.us.ci';//兜底proxyip
-// 订阅和面板使用的优选ip地址，可支持ip:port#name格式
-const ipListAll = ["172.64.154.125", "104.18.39.123", "172.64.145.18", "104.18.42.218", "104.18.33.131", "172.64.145.38", "172.64.145.202", "104.18.42.151"];
 const traceUrl = 'http://cp.cloudflare.com/cdn-cgi/trace', proxySuffix = '.proxy.zjcloud.us.ci';
 let currentColo = null, pendingPromise = null;
 const getCurrentColo = () => {
@@ -52,77 +75,23 @@ const getCurrentColo = () => {
         return currentColo = i !== -1 ? t.slice(i + 5, i + 8) + proxySuffix : finallyProxyHost
     }).catch(() => currentColo = finallyProxyHost).finally(() => {pendingPromise = null})
 };
-const textEncoder = new TextEncoder(), textDecoder = new TextDecoder();
-const panelHtmlUrl = 'https://1345695.github.io/index-404-html/panel';
-const errorHtmlUrl = 'https://1345695.github.io/index-404-html/';
-import wasmModule from './protocol.wasm';
-const instance = new WebAssembly.Instance(wasmModule);
-const {
-    memory, getUuidPtr, getResultPtr, getDataPtr, getHttpAuthPtr, getSocks5AuthPtr, parseProtocolWasm, parseUrlWasm,
-    initCredentialsWasm, getTemplateWasm, getSecretStringWasm
-} = instance.exports;
-const wasmMem = new Uint8Array(memory.buffer);
-const wasmRes = new Int32Array(memory.buffer, getResultPtr(), 36);
-const dataPtr = getDataPtr();
-let isInitialized = false, config = null, cachedTemplates = null, strList = null, userAgentSuffix = null;
-const getEnv = (env) => {
-    if (config) return config;
-    config = {
-        uuid: (env.UUID || defaultUuid).trim(),
-        password: (env.PASSWORD || defaultPassword).trim(),
-        user: (env.S5HTTPUSER || socks5AndHttpUser).trim(),
-        pass: (env.S5HTTPPASS || socks5AndHttpPass).trim(),
-        sspass: (env.SSPASS || ssAeadPassword).trim()
-    };
-    return config;
-};
-const initializeWasm = (env) => {
-    wasmRes[13] = enableSniSniff ? 1 : 0;
-    const {uuid, password, user, pass} = getEnv(env);
-    const cleanUuid = uuid.replaceAll('-', '').match(/../g);
-    if (cleanUuid.length === 32) {
-        wasmRes[0] = 1;
-        const uuidBytes = new Uint8Array(16);
-        for (let i = 0, c; i < 16; i++) {uuidBytes[i] = (((c = cleanUuid.charCodeAt(i * 2)) > 64 ? c + 9 : c) & 0xF) << 4 | (((c = cleanUuid.charCodeAt(i * 2 + 1)) > 64 ? c + 9 : c) & 0xF)}
-        wasmMem.set(uuidBytes, getUuidPtr());
-    }
-    if (password.length > 0) {
-        wasmRes[1] = 1;
-        const passBytes = textEncoder.encode(password);
-        wasmMem.set(passBytes, dataPtr);
-        initCredentialsWasm(passBytes.length);
-    }
-    if (user && pass) {
-        const authBytes = textEncoder.encode(btoa(`${user}:${pass}`));
-        wasmMem.set(authBytes, getHttpAuthPtr());
-        wasmRes[2] = authBytes.length;
-        const userBytes = textEncoder.encode(user);
-        const passBytes = textEncoder.encode(pass);
-        const socks5Pkg = new Uint8Array(3 + userBytes.length + passBytes.length);
-        socks5Pkg[0] = 1, socks5Pkg[1] = userBytes.length, socks5Pkg.set(userBytes, 2), socks5Pkg[2 + userBytes.length] = passBytes.length, socks5Pkg.set(passBytes, 3 + userBytes.length);
-        wasmMem.set(socks5Pkg, getSocks5AuthPtr());
-        wasmRes[3] = socks5Pkg.length;
-    }
-    cachedTemplates = new Array(9);
-    const subUuid = uuid || crypto.randomUUID();
-    const subPassword = password || crypto.randomUUID();
-    globalThis.subUuid = subUuid;
-    const getSecret = (idx) => {
-        const len = getSecretStringWasm(idx);
-        return textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
-    };
-    strList = new Array(19);
-    for (let i = 0; i < 19; i++) {strList[i] = getSecret(i)}
-    const edge = strList[2];
-    userAgentSuffix = edge + strList[3] + edge + strList[4];
-    for (let i = 0; i < 9; i++) {
-        const len = getTemplateWasm(i);
-        const tmpl = textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
-        const baseTmpl = tmpl.replaceAll("{{ECHDNS}}", encodeURIComponent(sharedEchDns));
-        cachedTemplates[i] = i < 5 ? baseTmpl.replaceAll("{{UUID}}", subUuid) : baseTmpl.replaceAll("{{PASSWORD}}", subPassword);
-    }
-    isInitialized = true;
-};
+const _h = c => (c > 64 ? (c & 7) + 9 : c & 15);
+const _b = p => (_h(uuid.charCodeAt(p)) << 4) | _h(uuid.charCodeAt(p + 1));
+const U0 = _b(0), U1 = _b(2), U2 = _b(4), U3 = _b(6), U4 = _b(9), U5 = _b(11), U6 = _b(14), U7 = _b(16), U8 = _b(19), U9 = _b(21), U10 = _b(24), U11 = _b(26), U12 = _b(28), U13 = _b(30), U14 = _b(32), U15 = _b(34);
+const _c = i => passWordSha224.charCodeAt(i);
+const H0 = _c(0), H1 = _c(1), H2 = _c(2), H3 = _c(3), H4 = _c(4), H5 = _c(5), H6 = _c(6), H7 = _c(7), H8 = _c(8), H9 = _c(9), H10 = _c(10), H11 = _c(11), H12 = _c(12), H13 = _c(13),
+    H14 = _c(14), H15 = _c(15), H16 = _c(16), H17 = _c(17), H18 = _c(18), H19 = _c(19), H20 = _c(20), H21 = _c(21), H22 = _c(22), H23 = _c(23), H24 = _c(24), H25 = _c(25), H26 = _c(26), H27 = _c(27),
+    H28 = _c(28), H29 = _c(29), H30 = _c(30), H31 = _c(31), H32 = _c(32), H33 = _c(33), H34 = _c(34), H35 = _c(35), H36 = _c(36), H37 = _c(37), H38 = _c(38), H39 = _c(39), H40 = _c(40), H41 = _c(41),
+    H42 = _c(42), H43 = _c(43), H44 = _c(44), H45 = _c(45), H46 = _c(46), H47 = _c(47), H48 = _c(48), H49 = _c(49), H50 = _c(50), H51 = _c(51), H52 = _c(52), H53 = _c(53), H54 = _c(54), H55 = _c(55);
+const textEncoder = new TextEncoder(), textDecoder = new TextDecoder(), socks5req = new Uint8Array([5, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+let socks5Pkg, httpAuthValue;
+const httpRes200 = textEncoder.encode("HTTP/1.1 200 Connection Established\r\n\r\n"), httpRes407 = textEncoder.encode("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\n\r\n");
+if (socks5AndHttpUser && socks5AndHttpPass) {
+    httpAuthValue = textEncoder.encode(btoa(`${socks5AndHttpUser}:${socks5AndHttpPass}`));
+    const userBytes = textEncoder.encode(socks5AndHttpUser), passBytes = textEncoder.encode(socks5AndHttpPass);
+    socks5Pkg = new Uint8Array(3 + userBytes.length + passBytes.length);
+    socks5Pkg[0] = 1, socks5Pkg[1] = userBytes.length, socks5Pkg.set(userBytes, 2), socks5Pkg[2 + userBytes.length] = passBytes.length, socks5Pkg.set(passBytes, 3 + userBytes.length);
+}
 const binaryAddrToString = (addrType, addrBytes) => {
     if (addrType === 3) return textDecoder.decode(addrBytes);
     if (addrType === 1) return `${addrBytes[0]}.${addrBytes[1]}.${addrBytes[2]}.${addrBytes[3]}`;
@@ -141,7 +110,7 @@ let ssMasterKeyPromise, ssHkdfKeyPromise;
 const createSsAeadCtx = async (salt = crypto.getRandomValues(new Uint8Array(16))) => {
     const hkdfKey = await (ssHkdfKeyPromise ||= (async () => {
         const masterKey = await (ssMasterKeyPromise ||= (async () => {
-            const pwd = textEncoder.encode(config.sspass);
+            const pwd = textEncoder.encode(ssAeadPassword);
             const out = new Uint8Array(16);
             let prev = emptyU8, offset = 0;
             while (offset < 16) {
@@ -285,15 +254,6 @@ const parseHostPort = (addr, defaultPort) => {
     }
     return [host, (port = parseInt(port), isNaN(port) ? defaultPort : port)];
 };
-const parseSubNode = (entry, defaultPort = 443) => {
-    const raw = (entry || '').trim();
-    if (!raw) return null;
-    const hashIndex = raw.indexOf('#');
-    const endpoint = hashIndex === -1 ? raw : raw.slice(0, hashIndex).trim();
-    const customName = hashIndex === -1 ? '' : raw.slice(hashIndex + 1).trim();
-    const [ip, portNum] = parseHostPort(endpoint || raw, defaultPort);
-    return {ip, port: String(portNum), name: customName || ip};
-};
 const parseAuthString = (authParam, defaultPort = 1080) => {
     let username, password, hostStr;
     const atIndex = authParam.lastIndexOf('@');
@@ -390,6 +350,419 @@ const connectViaSocksProxy = async (targetAddrType, targetPortNum, socksAuth, ad
     writer.releaseLock(), reader.releaseLock();
     return socksSocket;
 };
+const {TlsClient} = (() => {
+    const b = crypto.subtle, V = new TextEncoder, g = new Uint8Array(0), f = s => [s >> 8, s & 255], A = (s, t) => s[t] << 8 | s[t + 1], E = (...s) => {
+            const t = a => {
+                let i = 0;
+                for (let c = 0; c < a.length; c++) {
+                    const l = a[c];
+                    i += l instanceof Uint8Array ? l.length : Array.isArray(l) ? t(l) : 1
+                }
+                return i
+            }, e = new Uint8Array(t(s));
+            let r = 0;
+            const n = a => {
+                for (let i = 0; i < a.length; i++) {
+                    const c = a[i];
+                    c instanceof Uint8Array ? (e.set(c, r), r += c.length) : Array.isArray(c) ? n(c) : e[r++] = c
+                }
+            };
+            return n(s), e
+        }, d = (...s) => {
+            const t = new Uint8Array(s.reduce((r, n) => r + (n?.length || 0), 0));
+            let e = 0;
+            for (const r of s) r?.length && (t.set(r, e), e += r.length);
+            return t
+        }, D = s => s === "SHA-384" ? 48 : 32, G = s => s?.[0] === 1 && s[1] === 112, X = async (s, t, e) => new Uint8Array(await b.sign("HMAC", t.type ? t : await b.importKey("raw", t, {name: "HMAC", hash: s}, !1, ["sign"]), e)), K = async (s, t) => new Uint8Array(await b.digest(s, t)), W = (s, t) => b.importKey("raw", s, {name: "AES-GCM"}, !1, [t]), J = async (s, t, e, r) => new Uint8Array(await b.encrypt({name: "AES-GCM", iv: t, additionalData: r}, s, e)),
+        N = async (s, t, e, r) => new Uint8Array(await b.decrypt({name: "AES-GCM", iv: t, additionalData: r}, s, e)), P = (s, t, e = 771, r = t.length) => {
+            const n = new Uint8Array(5 + r);
+            return n[0] = s, n[1] = e >> 8, n[2] = e & 255, n[3] = r >> 8, n[4] = r & 255, n.set(t, 5), n
+        }, $ = (s, t = 23) => {
+            let e = 0;
+            for (let a = 0; a < s.length; a++) e += 5 + s[a].length;
+            const r = new Uint8Array(e);
+            let n = 0;
+            for (let a = 0; a < s.length; a++) {
+                const i = s[a], c = i.length;
+                r[n] = t, r[n + 1] = 3, r[n + 2] = 3, r[n + 3] = c >> 8, r[n + 4] = c & 255, r.set(i, n + 5), n += 5 + c
+            }
+            return r
+        }, L = (s, t, e = t.length) => {
+            const r = new Uint8Array(4 + e);
+            return r[0] = s, r[1] = e >> 16 & 255, r[2] = e >> 8 & 255, r[3] = e & 255, r.set(t, 4), r
+        }, R = s => new Uint8Array([23, 3, 3, s >> 8, s & 255]), z = (s, t, e) => X(s, t?.length ? t : new Uint8Array(D(s)), e), F = async (s, t, e, r, n = "SHA-256") => {
+            const a = d(V.encode(t), e), i = s.type ? s : await b.importKey("raw", s, {name: "HMAC", hash: n}, !1, ["sign"]);
+            let c = g, l = a;
+            for (; c.length < r;) l = await X(n, i, l), c = d(c, await X(n, i, d(l, a)));
+            return c.slice(0, r)
+        }, q = async (s, t, e, r, n) => {
+            const a = typeof e == "string" ? V.encode("tls13 " + e) : e, i = D(s), c = a.length, l = r.length, h = new Uint8Array(4 + c + l);
+            h[0] = n >> 8, h[1] = n & 255, h[2] = c, h.set(a, 3), h[3 + c] = l, l && h.set(r, 4 + c);
+            const w = t.type ? t : await b.importKey("raw", t, {name: "HMAC", hash: s}, !1, ["sign"]);
+            let k = g, p = g;
+            for (let U = 1; U <= Math.ceil(n / i); U++) {
+                const v = new Uint8Array(p.length + h.length + 1);
+                p.length && v.set(p), v.set(h, p.length), v[p.length + h.length] = U, p = await X(s, w, v), k = d(k, p)
+            }
+            return k.slice(0, n)
+        }, Q = async (s = "P-256") => {
+            const t = s === "X25519", e = await b.generateKey(t ? {name: s} : {name: "ECDH", namedCurve: s}, !0, ["deriveBits"]);
+            return {kp: e, pk: new Uint8Array(await b.exportKey("raw", e.publicKey))}
+        }, Y = async (s, t, e = "P-256") => {
+            const r = e === "X25519", n = await b.importKey("raw", t, r ? {name: e} : {name: "ECDH", namedCurve: e}, !1, []);
+            return new Uint8Array(await b.deriveBits({name: r ? e : "ECDH", public: n}, s, 256))
+        }, tt = (s, t, e, {sessionId: r = g} = {}) => {
+            const n = E(...[4865, 4866, 49199, 49200, 49195, 49196].flatMap(f)), a = [E(255, 1, 0, 1, 0)];
+            if (t) {
+                const l = V.encode(t);
+                a.push(E(0, 0, f(l.length + 5), f(l.length + 3), 0, f(l.length), l))
+            }
+            const i = d(E(0, 29, f(e.x25519.length), e.x25519), E(0, 23, f(e.p256.length), e.p256));
+            a.push(E(f(11), 0, 2, 1, 0), E(f(10), 0, 6, 0, 4, 0, 29, 0, 23), E(f(13), 0, 34, 0, 32, ...[2052, 2053, 2054, 2055, 2056, 2057, 2058, 2059, 1027, 1283, 1539, 1025, 1281, 1537, 513, 515].flatMap(f)), E(f(43), 0, 5, 4, 3, 4, 3, 3), E(f(51), f(i.length + 2), f(i.length), i));
+            const c = d(...a);
+            return L(1, E(f(771), s, r.length, r, f(n.length), n, 1, 0, f(c.length), c))
+        }, T = async (s, t, e, r, n) => {
+            const a = t.type ? t : await b.importKey("raw", t, {name: "HMAC", hash: s}, !1, ["sign"]), [i, c] = await Promise.all([q(s, a, "key", g, e), q(s, a, "iv", g, r)]);
+            return [await W(i, n), c]
+        }, Z = s => {
+            let t = s.length - 1;
+            for (; t >= 0 && !s[t];) t--;
+            if (t < 0) throw new Error;
+            return {data: s.subarray(0, t), type: s[t]}
+        }, B = (s, t) => {
+            const e = s.slice(), r = t >>> 0, n = t / 4294967296 >>> 0, a = e.length - 8;
+            return e[a] ^= n >>> 24, e[a + 1] ^= n >>> 16, e[a + 2] ^= n >>> 8, e[a + 3] ^= n, e[a + 4] ^= r >>> 24, e[a + 5] ^= r >>> 16, e[a + 6] ^= r >>> 8, e[a + 7] ^= r, e
+        };
+    class _ {
+        constructor(t, e, r) {this.b = new Uint8Array(t), this.h = this.t = 0, this.l = e, this.g = r}
+        feed(t) {
+            const e = this;
+            if (e.t + t.length > e.b.length) {
+                const r = e.t - e.h, n = r + t.length > e.b.length, a = n ? new Uint8Array(Math.max(e.b.length * 2, r + t.length)) : e.b;
+                n ? a.set(e.b.subarray(e.h, e.t)) : a.copyWithin(0, e.h, e.t), e.b = a, e.t = r, e.h = 0
+            }
+            e.b.set(t, e.t), e.t += t.length
+        }
+        next() {
+            const t = this;
+            if (t.t - t.h < t.l) return null;
+            const e = t.g(t.b, t.h);
+            if (t.l === 5 && e > 18432) throw new Error;
+            if (t.t - t.h < t.l + e) return null;
+            const r = t.b.subarray(t.h, t.h += t.l + e), n = r.subarray(t.l);
+            return t.h === t.t && (t.h = t.t = 0), {type: r[0], version: t.l === 5 ? A(r, 1) : 0, length: e, body: n, fragment: n, raw: r}
+        }
+    }
+    class et {
+        constructor(t, e = {}) {
+            const r = this;
+            r.sk = t, r.sn = e.serverName || "", r.cr = crypto.getRandomValues(new Uint8Array(32)), r.id = crypto.getRandomValues(new Uint8Array(32)), r.hb = new Uint8Array(8192), r.hl = 0, r.cn = 0, r.qn = 0, r.rp = new _(32768, 5, (n, a) => A(n, a + 3)), r.hp = new _(4096, 4, (n, a) => n[a + 1] << 16 | A(n, a + 2)), r.kp = new Map, r.pq = [], r.wq = Promise.resolve(), r.rb = new Uint8Array(65536), r.rd = null, r.wr = null, r.fl = !1, r.cl = !1, r.cg = !1, r.hc = !1, r.cp = null, r.i3 = !1, r.cs = null, r.cc = null, r.sr = null, r.hs = null, r.ch = null, r.ci = null, r.sh = null, r.si = null, r.ak = null, r.ai = null, r.bk = null, r.bi = null, r.ms = null, r.ck = null, r.wk = null, r.cv = null, r.wv = null, r.as = null, r.bs = null
+        }
+        rh(t) {
+            const e = this;
+            if (e.hl + t.length > e.hb.length) {
+                const r = new Uint8Array(Math.max(e.hb.length * 2, e.hl + t.length));
+                r.set(e.hb.subarray(0, e.hl)), e.hb = r
+            }
+            e.hb.set(t, e.hl), e.hl += t.length
+        }
+        ts() {return this.hb.subarray(0, this.hl)}
+        fc() {return this.cn++}
+        fs() {return this.qn++}
+        fail() {
+            const t = this;
+            t.fl = t.cl = !0;
+            try {t.sk?.close()} catch {}
+            try {t.rd?.cancel()} catch {}
+            try {t.wr?.abort()} catch {}
+        }
+        async rc() {
+            const t = this, e = await t.rd.read(t.rb);
+            if (!e) throw new Error;
+            return !e.done && e.value && (t.rb = new Uint8Array(e.value.buffer)), e
+        }
+        async pr(t) {
+            const e = this;
+            for (; ;) {
+                for (let a; a = e.rp.next();) if (await t(a)) return;
+                const {value: r, done: n} = await e.rc();
+                if (n) throw new Error;
+                e.rp.feed(r)
+            }
+        }
+        async handshake() {
+            const t = this, [e, r] = await Promise.all([Q("P-256"), Q("X25519")]);
+            t.kp = new Map([[23, e], [29, r]]), t.rd = t.sk.readable.getReader({mode: "byob"}), t.wr = t.sk.writable.getWriter();
+            try {
+                const n = tt(t.cr, t.sn, {p256: e.pk, x25519: r.pk}, {sessionId: t.id});
+                t.rh(n), await t.wr.write(P(22, n, 769));
+                const a = await t.rsh();
+                if (a.isTls13) {
+                    const i = a.ks?.group === 29 ? "X25519" : a.ks?.group === 23 ? "P-256" : null, c = t.kp.get(a.ks?.group);
+                    if (!i || !a.ks?.key?.length || !c) throw new Error;
+                    const l = t.cc.hash, h = D(l), {keyLen: w, ivLen: k} = t.cc, p = await Y(c.kp.privateKey, a.ks.key, i), U = await q(l, await z(l, null, new Uint8Array(h)), "derived", await K(l, g), h);
+                    t.hs = await z(l, U, p);
+                    const v = await K(l, t.ts()), y = await q(l, t.hs, "c hs traffic", v, h), C = await q(l, t.hs, "s hs traffic", v, h);
+                    [t.ch, t.ci] = await T(l, y, w, k, "encrypt"), [t.sh, t.si] = await T(l, C, w, k, "decrypt");
+                    let m = !1;
+                    await t.pr(async u => {
+                        if (u.type === 20 || u.type === 22) return;
+                        if (u.type === 21) {
+                            if (G(u.fragment)) return;
+                            throw new Error
+                        }
+                        if (u.type !== 23) return;
+                        const {data: rt, type: nt} = Z(await N(t.sh, B(t.si, t.fs()), u.fragment, R(u.fragment.length)));
+                        if (nt === 22) {
+                            t.hp.feed(rt);
+                            for (let I; I = t.hp.next();) if (t.rh(I.raw), I.type === 13) m = !0; else if (I.type === 20) return 1
+                        }
+                    });
+                    const M = await K(l, t.ts()), x = await q(l, t.hs, "derived", await K(l, g), h), H = await z(l, x, new Uint8Array(h));
+                    t.as = await q(l, H, "c ap traffic", M, h), t.bs = await q(l, H, "s ap traffic", M, h), [t.ak, t.ai] = await T(l, t.as, w, k, "encrypt"), [t.bk, t.bi] = await T(l, t.bs, w, k, "decrypt");
+                    let S = g;
+                    m && (S = L(11, new Uint8Array(4)), t.rh(S));
+                    const O = await q(l, y, "finished", g, h), j = L(20, await X(l, O, await K(l, t.ts())));
+                    t.rh(j);
+                    const o = d(S, j, new Uint8Array([22]));
+                    await t.wr.write(d(P(20, new Uint8Array([1])), P(23, await J(t.ch, B(t.ci, t.fc()), o, R(o.length + 16))))), t.cn = t.qn = 0
+                } else {
+                    let i = null, c = !1, l = !1;
+                    const h = async o => {
+                        if (t.rh(o.raw), o.type === 12) {
+                            i = {nc: A(o.body, 1), spk: o.body.subarray(4, 4 + o.body[3])};
+                        } else {
+                            if (o.type === 14) return c = !0, 1;
+                            o.type === 13 && (l = !0)
+                        }
+                    };
+                    let w = !1;
+                    for (let o; o = t.hp.next();) if (await h(o)) {
+                        w = !0;
+                        break
+                    }
+                    if (!w) {
+                        for (let o; o = t.rp.next();) if (o.type === 22) {
+                            t.hp.feed(o.fragment);
+                            for (let u; u = t.hp.next();) if (await h(u)) {
+                                w = !0;
+                                break
+                            }
+                            if (w) break
+                        }
+                    }
+                    if (w || await t.pr(async o => {
+                        if (o.type === 21) {
+                            if (G(o.fragment)) return;
+                            throw new Error
+                        }
+                        if (o.type === 20) throw new Error;
+                        if (o.type === 22) {
+                            t.hp.feed(o.fragment);
+                            for (let u; u = t.hp.next();) if (await h(u)) return 1
+                        }
+                    }), !c || !i) {
+                        throw new Error;
+                    }
+                    const k = i.nc === 29 ? "X25519" : i.nc === 23 ? "P-256" : null, p = t.kp.get(i.nc);
+                    if (!k || !p) throw new Error;
+                    let U = g;
+                    if (l) {
+                        const o = L(11, new Uint8Array(3));
+                        t.rh(o), U = P(22, o)
+                    }
+                    const v = await Y(p.kp.privateKey, i.spk, k), y = L(16, d(new Uint8Array([p.pk.length]), p.pk));
+                    t.rh(y);
+                    const C = t.cc.hash;
+                    t.ms = await F(v, "master secret", d(t.cr, t.sr), 48, C);
+                    const {keyLen: m, ivLen: M} = t.cc, x = await F(t.ms, "key expansion", d(t.sr, t.cr), 2 * m + 2 * M, C);
+                    [t.ck, t.wk] = await Promise.all([W(x.subarray(0, m), "encrypt"), W(x.subarray(m, 2 * m), "decrypt")]), t.cv = x.subarray(2 * m, 2 * m + M), t.wv = x.subarray(2 * m + M, 2 * m + 2 * M);
+                    const H = await F(t.ms, "client finished", await K(C, t.ts()), 12, C), S = L(20, H);
+                    t.rh(S);
+                    const O = await t.e12(S, 22);
+                    await t.wr.write(d(U, P(22, y), P(20, new Uint8Array([1])), P(22, O)));
+                    let j = !1;
+                    await t.pr(async o => {
+                        if (o.type === 21) {
+                            if (G(o.fragment)) return;
+                            throw new Error
+                        }
+                        if (o.type === 20) return void (j = !0);
+                        if (o.type === 22 && j) {
+                            t.hp.feed(await t.d12(o.fragment, 22));
+                            for (let u; u = t.hp.next();) if (u.type === 20) return 1
+                        }
+                    })
+                }
+                t.hc = !0, t.cr = t.id = t.sr = t.ms = t.hs = t.ch = t.sh = t.ci = t.si = null, t.kp.clear(), t.kp = null
+            } finally {
+                if (!t.hc || t.fl) {
+                    try {t.rd?.releaseLock()} catch {}
+                    try {t.wr?.releaseLock()} catch {}
+                }
+            }
+        }
+        async rsh() {
+            const t = this;
+            for (; ;) {
+                const {value: e, done: r} = await t.rc();
+                if (r) throw new Error;
+                t.rp.feed(e);
+                for (let n; n = t.rp.next();) {
+                    if (n.type === 21) {
+                        if (G(n.fragment)) continue;
+                        throw new Error
+                    }
+                    if (n.type !== 20 && n.type === 22) {
+                        t.hp.feed(n.fragment);
+                        for (let a; a = t.hp.next();) {
+                            if (a.type !== 2) continue;
+                            t.rh(a.raw);
+                            let i = 2;
+                            const c = A(a.body, 0), l = a.body.slice(i, i += 32), h = a.body[i++], w = a.body.subarray(i, i += h), k = A(a.body, i);
+                            i += 2;
+                            const p = a.body[i++];
+                            let U = c, v = null;
+                            if (i < a.body.length) {
+                                const m = i + 2 + A(a.body, i);
+                                for (i += 2; i + 4 <= m;) {
+                                    const M = A(a.body, i), x = A(a.body, i + 2), H = a.body.subarray(i += 4, i += x);
+                                    M === 43 && x >= 2 ? U = A(H, 0) : M === 51 && x >= 2 && (v = {group: A(H, 0), key: x >= 4 ? H.subarray(4, 4 + A(H, 2)) : g})
+                                }
+                            }
+                            const y = {version: c, sr: l, sid: w, cs: k, comp: p, sv: U, ks: v, isTls13: U === 772}, C = y.cs === 4866 || y.cs === 49200 || y.cs === 49196;
+                            if (!C && y.cs !== 4865 && y.cs !== 49199 && y.cs !== 49195 || p !== 0 || y.cs < 49e3 !== y.isTls13 || !y.isTls13 && y.sv !== 771) throw new Error;
+                            return t.sr = y.sr, t.cs = y.cs, t.cc = {keyLen: C ? 32 : 16, ivLen: y.isTls13 ? 12 : 4, hash: C ? "SHA-384" : "SHA-256", tls13: y.isTls13}, t.i3 = y.isTls13, y
+                        }
+                    }
+                }
+            }
+        }
+        async e12(t, e, r = this.fc()) {
+            const n = new Uint8Array(13), a = r >>> 0, i = r / 4294967296 >>> 0;
+            n[0] = i >>> 24, n[1] = i >>> 16, n[2] = i >>> 8, n[3] = i, n[4] = a >>> 24, n[5] = a >>> 16, n[6] = a >>> 8, n[7] = a, n[8] = e, n[9] = 3, n[10] = 3, n[11] = t.length >> 8, n[12] = t.length & 255;
+            const c = n.subarray(0, 8), l = new Uint8Array(12);
+            l.set(this.cv), l.set(c, 4);
+            const h = await J(this.ck, l, t, n), w = new Uint8Array(8 + h.length);
+            return w.set(c), w.set(h, 8), w
+        }
+        async d12(t, e, r = this.fs()) {
+            const n = t.subarray(0, 8), a = t.subarray(8), i = new Uint8Array(12);
+            i.set(this.wv), i.set(n, 4);
+            const c = new Uint8Array(13), l = a.length - 16, h = r >>> 0, w = r / 4294967296 >>> 0;
+            return c[0] = w >>> 24, c[1] = w >>> 16, c[2] = w >>> 8, c[3] = w, c[4] = h >>> 24, c[5] = h >>> 16, c[6] = h >>> 8, c[7] = h, c[8] = e, c[9] = 3, c[10] = 3, c[11] = l >> 8, c[12] = l & 255, N(this.wk, i, a, c)
+        }
+        async e13(t, e = this.fc(), r = 23) {
+            const n = new Uint8Array(t.length + 1);
+            return n.set(t), n[t.length] = r, J(this.ak, B(this.ai, e), n, R(n.length + 16))
+        }
+        async d13(t, e = this.fs(), r = this.bk, n = this.bi) {return Z(await N(r, B(n, e), t, R(t.length)))}
+        write(t) {
+            const e = this;
+            if (!e.hc || e.fl || e.cg) return Promise.reject(new Error);
+            const r = t instanceof Uint8Array ? t.slice() : new Uint8Array(t);
+            if (!r.length) return Promise.resolve();
+            const n = e.wq.then(async () => {
+                if (e.fl || e.cg) throw new Error;
+                if (r.length <= 16384) return e.wr.write(P(23, e.i3 ? await e.e13(r) : await e.e12(r, 23)));
+                for (let i = 0; i < r.length;) {
+                    const c = [];
+                    for (let l = 0; l < 8 && i < r.length; l++, i += 16384) {
+                        const h = r.subarray(i, Math.min(i + 16384, r.length)), w = e.fc();
+                        c.push(e.i3 ? e.e13(h, w) : e.e12(h, 23, w))
+                    }
+                    await e.wr.write($(await Promise.all(c)))
+                }
+            }), a = n.catch(i => {throw e.fail(), i});
+            return e.wq = a.catch(() => {}), a
+        }
+        read() {
+            const t = this;
+            return t.fl || !t.hc ? Promise.reject(new Error) : (async () => {
+                for (; ;) {
+                    if (t.pq.length) return t.pq.length === 1 ? t.pq.pop() : d(...t.pq.splice(0));
+                    if (t.cl) return null;
+                    const e = [];
+                    for (let a; e.length < 8 && (a = t.rp.next());) if (!(t.i3 ? a.type === 20 : ![21, 22, 23].includes(a.type))) {
+                        if (t.i3 && a.type !== 23) throw new Error;
+                        e.push(a)
+                    }
+                    if (e.length) {
+                        if (t.i3) {
+                            const a = t.qn, i = t.bk, c = t.bi;
+                            let l;
+                            try {l = await Promise.all(e.map((h, w) => t.d13(h.fragment, a + w, i, c)))} catch {}
+                            if (l) {
+                                t.qn = a + l.length;
+                                for (const h of l) await t.p13(h)
+                            } else {
+                                for (let h = 0; h < e.length; h++) await t.p13(await t.d13(e[h].fragment, t.qn++))
+                            }
+                        } else {
+                            const a = t.qn, i = await Promise.all(e.map((c, l) => t.d12(c.fragment, c.type, a + l)));
+                            t.qn = a + e.length;
+                            for (let c = 0; c < i.length; c++) {
+                                const l = i[c], h = e[c].type;
+                                if (h === 23) t.pq.push(l); else if (h === 21) t.pa(l); else if (h === 22) for (t.hp.feed(l); t.hp.next();) ;
+                            }
+                        }
+                        if (t.pq.length) return t.pq.length === 1 ? t.pq.pop() : d(...t.pq.splice(0));
+                        if (t.cl) return null;
+                        continue
+                    }
+                    if (t.cl) return null;
+                    const {value: r, done: n} = await t.rc();
+                    if (n) return null;
+                    t.rp.feed(r)
+                }
+            })().catch(e => {throw t.fail(), e})
+        }
+        pa(t) {
+            const e = this;
+            if (e.cl = !0, t && t.length >= 2) {
+                const r = t[0], n = t[1];
+                if (r === 2 || r === 1 && n !== 0) throw e.fail(), new Error
+            }
+            e.close()
+        }
+        async p13({data: t, type: e}) {
+            if (e === 23) {
+                this.pq.push(t);
+            } else if (e === 21) {
+                this.pa(t);
+            } else if (e === 22) {
+                this.hp.feed(t);
+                for (let r; r = this.hp.next();) r.type === 24 && (await this.uv(), r.body[0] === 1 && await this.su(0))
+            }
+        }
+        async uk() {
+            const t = this, e = t.cc.hash, r = D(e), {keyLen: n, ivLen: a} = t.cc;
+            t.as = await q(e, t.as, "traffic upd", g, r), [t.ak, t.ai] = await T(e, t.as, n, a, "encrypt"), t.cn = 0
+        }
+        async uv() {
+            const t = this, e = t.cc.hash, r = D(e), {keyLen: n, ivLen: a} = t.cc;
+            t.bs = await q(e, t.bs, "traffic upd", g, r), [t.bk, t.bi] = await T(e, t.bs, n, a, "decrypt"), t.qn = 0
+        }
+        su(t = 0) {
+            const e = this;
+            if (!e.hc || e.fl || e.cg) return Promise.reject(new Error);
+            const r = e.wq.then(async () => {
+                if (e.fl || e.cg) throw new Error;
+                const a = L(24, new Uint8Array([t]));
+                await e.wr.write(P(23, await e.e13(a, e.fc(), 22))), await e.uk()
+            }), n = r.catch(a => {throw e.fail(), a});
+            return e.wq = n.catch(() => {}), n
+        }
+        close() {
+            const t = this;
+            return t.cp ? t.cp : t.fl || !t.hc ? (t.sk?.close(), t.cp = Promise.resolve()) : (t.cg = !0, t.wq = t.cp = t.wq.then(async () => {
+                const e = new Uint8Array([1, 0]), r = t.i3 ? await t.e13(e, t.fc(), 21) : await t.e12(e, 21);
+                await t.wr.write(P(t.i3 ? 23 : 21, r))
+            }).catch(() => {}).finally(() => {t.cl = !0, t.sk?.close()}))
+        }
+    }
+    return {TlsClient: et}
+})();
 const tlsStreamAdapter = (tls, initial = new Uint8Array(0)) => {
     let leftOver = initial?.byteLength ? initial : null, reading = null, closed = false, tlsClosed = false;
     const close = () => {
@@ -1186,6 +1559,156 @@ const extractSniBytes = (data) => {
     }
     return null;
 };
+const parseProtocolChunk = (chunk, socks5State) => {
+    const len = chunk.length;
+    const result = {success: false, needMore: false, nextSocksState: 0, handshake: null, parsedRequest: null};
+    if (socks5State === 1) {
+        const authLen = socks5Pkg?.length || 0;
+        if (len < authLen) return result.needMore = true, result;
+        let match = len === authLen;
+        for (let i = 0; match && i < authLen; i++) if (chunk[i] !== socks5Pkg[i]) match = false;
+        return result.handshake = new Uint8Array([1, match ? 0 : 1]), result.nextSocksState = match ? 2 : 0, result;
+    }
+    if (socks5State === 2) {
+        if (len < 4) return result.needMore = true, result;
+        if (chunk[0] !== 5 || chunk[1] !== 1) return result;
+        let addrType = chunk[3];
+        const addrLen = addrType === 3 ? (4 < len ? chunk[4] : null) : addrType === 1 ? 4 : addrType === 4 ? 16 : -1;
+        if (addrLen === null) return result.needMore = true, result;
+        if (!(addrLen > 0)) return result;
+        const addrOffset = addrType === 3 ? 5 : 4, dataOffset = addrOffset + addrLen + 2;
+        if (len < dataOffset) return result.needMore = true, result;
+        const portOffset = dataOffset - 2, port = (chunk[portOffset] << 8) | chunk[portOffset + 1];
+        result.handshake = socks5req, result.success = true, result.parsedRequest = {addrType, addrBytes: chunk.subarray(addrOffset, addrOffset + addrLen), dataOffset, port, isDns: port === 53};
+        return result;
+    }
+    if (chunk[0] === 5) {
+        if (len < 2) return result.needMore = true, result;
+        const fullLen = 2 + chunk[1];
+        if (len < fullLen) return result.needMore = true, result;
+        const required = socks5Pkg ? 2 : 0;
+        let supported = false;
+        for (let i = 0; i < chunk[1]; i++) {
+            if (chunk[2 + i] === required) {
+                supported = true;
+                break;
+            }
+        }
+        return result.handshake = new Uint8Array([5, supported ? required : 0xFF]), result.nextSocksState = supported ? (required === 2 ? 1 : 2) : 0, result;
+    }
+    if (chunk[0] === 67) {
+        if (len < 48) return result.needMore = true, result;
+        if (chunk[1] === 79) {
+            if (chunk[len - 4] !== 13 || chunk[len - 3] !== 10 || chunk[len - 2] !== 13 || chunk[len - 1] !== 10) return result.needMore = true, result;
+            const secondSpace = chunk.indexOf(32, 8);
+            if (secondSpace !== -1) {
+                if (httpAuthValue) {
+                    let matchAuth = false;
+                    const searchLimit = len > 1024 ? 1024 : len;
+                    for (let p = secondSpace + 30; p + httpAuthValue.length + 6 < searchLimit; p++) {
+                        if (chunk[p] === 66 && chunk[p + 1] === 97 && chunk[p + 2] === 115 && chunk[p + 3] === 105 && chunk[p + 4] === 99 && chunk[p + 5] === 32) {
+                            matchAuth = true;
+                            for (let j = 0; j < httpAuthValue.length; j++) {
+                                if (chunk[p + 6 + j] !== httpAuthValue[j]) {
+                                    matchAuth = false;
+                                    break;
+                                }
+                            }
+                            if (matchAuth) break;
+                        }
+                    }
+                    if (!matchAuth) return result.handshake = httpRes407, result;
+                }
+                let lastColon = -1;
+                for (let i = secondSpace - 3; i >= 8; i--) {
+                    if (chunk[i] === 58) {
+                        lastColon = i;
+                        break;
+                    }
+                }
+                if (lastColon > 8) {
+                    let port = 0;
+                    for (let i = lastColon + 1, digit; i < secondSpace && (digit = chunk[i] - 48) >= 0 && digit <= 9; i++) port = port * 10 + digit;
+                    result.handshake = httpRes200, result.success = true, result.parsedRequest = {addrType: 3, addrBytes: chunk.subarray(8, lastColon), dataOffset: len, port, isDns: port === 53, isHttp: true};
+                    return result;
+                }
+            }
+        }
+    }
+    if (len >= 56 &&
+        chunk[0] === H0 && chunk[1] === H1 && chunk[2] === H2 && chunk[3] === H3 && chunk[4] === H4 && chunk[5] === H5 && chunk[6] === H6 && chunk[7] === H7 &&
+        chunk[8] === H8 && chunk[9] === H9 && chunk[10] === H10 && chunk[11] === H11 && chunk[12] === H12 && chunk[13] === H13 && chunk[14] === H14 && chunk[15] === H15 &&
+        chunk[16] === H16 && chunk[17] === H17 && chunk[18] === H18 && chunk[19] === H19 && chunk[20] === H20 && chunk[21] === H21 && chunk[22] === H22 && chunk[23] === H23 &&
+        chunk[24] === H24 && chunk[25] === H25 && chunk[26] === H26 && chunk[27] === H27 && chunk[28] === H28 && chunk[29] === H29 && chunk[30] === H30 && chunk[31] === H31 &&
+        chunk[32] === H32 && chunk[33] === H33 && chunk[34] === H34 && chunk[35] === H35 && chunk[36] === H36 && chunk[37] === H37 && chunk[38] === H38 && chunk[39] === H39 &&
+        chunk[40] === H40 && chunk[41] === H41 && chunk[42] === H42 && chunk[43] === H43 && chunk[44] === H44 && chunk[45] === H45 && chunk[46] === H46 && chunk[47] === H47 &&
+        chunk[48] === H48 && chunk[49] === H49 && chunk[50] === H50 && chunk[51] === H51 && chunk[52] === H52 && chunk[53] === H53 && chunk[54] === H54 && chunk[55] === H55
+    ) {
+        if (len < 60) return result.needMore = true, result;
+        let addrType = chunk[59];
+        let addrLen = addrType === 3 ? (60 < len ? chunk[60] : null) : addrType === 1 ? 4 : addrType === 4 ? 16 : -1;
+        if (addrLen === null) return result.needMore = true, result;
+        if (addrLen > 0) {
+            let addrOffset = addrType === 3 ? 61 : 60;
+            const dataOffset = addrOffset + addrLen + 4;
+            if (len < dataOffset) return result.needMore = true, result;
+            const portOffset = addrOffset + addrLen, port = (chunk[portOffset] << 8) | chunk[portOffset + 1];
+            if (enableSniSniff && addrType !== 3 && len >= dataOffset) {
+                const sniRes = extractSniBytes(chunk.subarray(dataOffset));
+                if (sniRes?.needMore) return result.needMore = true, result;
+                sniRes?.len && (addrType = 3, addrOffset = dataOffset + sniRes.offset, addrLen = sniRes.len);
+            }
+            result.success = true, result.parsedRequest = {addrType, addrBytes: chunk.subarray(addrOffset, addrOffset + addrLen), dataOffset, port, isDns: port === 53};
+            return result;
+        }
+    }
+    if (len >= 17 &&
+        chunk[1] === U0 && chunk[2] === U1 && chunk[3] === U2 && chunk[4] === U3 && chunk[5] === U4 && chunk[6] === U5 && chunk[7] === U6 && chunk[8] === U7 &&
+        chunk[9] === U8 && chunk[10] === U9 && chunk[11] === U10 && chunk[12] === U11 && chunk[13] === U12 && chunk[14] === U13 && chunk[15] === U14 && chunk[16] === U15
+    ) {
+        if (len < 18) return result.needMore = true, result;
+        const offset = 19 + chunk[17];
+        if (len < offset + 4) return result.needMore = true, result;
+        let addrType = chunk[offset + 2];
+        if (addrType !== 1) addrType += 1;
+        let addrLen = addrType === 3 ? (offset + 3 < len ? chunk[offset + 3] : null) : addrType === 1 ? 4 : addrType === 4 ? 16 : -1;
+        if (addrLen === null) return result.needMore = true, result;
+        if (addrLen > 0) {
+            let addrOffset = addrType === 3 ? offset + 4 : offset + 3;
+            const dataOffset = addrOffset + addrLen;
+            if (len < dataOffset) return result.needMore = true, result;
+            const port = (chunk[offset] << 8) | chunk[offset + 1];
+            if (enableSniSniff && addrType !== 3 && len >= dataOffset) {
+                const sniRes = extractSniBytes(chunk.subarray(dataOffset));
+                if (sniRes?.needMore) return result.needMore = true, result;
+                sniRes?.len && (addrType = 3, addrOffset = dataOffset + sniRes.offset, addrLen = sniRes.len);
+            }
+            result.handshake = new Uint8Array([chunk[0], 0]), result.success = true, result.parsedRequest = {addrType, addrBytes: chunk.subarray(addrOffset, addrOffset + addrLen), dataOffset, port, isDns: port === 53};
+            return result;
+        }
+    }
+    if (chunk[0] === 1 || chunk[0] === 3 || chunk[0] === 4) {
+        if (len < 2) return result.needMore = true, result;
+        let addrType = chunk[0];
+        let addrLen = addrType === 3 ? (1 < len ? chunk[1] : null) : addrType === 1 ? 4 : addrType === 4 ? 16 : -1;
+        if (addrLen === null) return result.needMore = true, result;
+        if (addrLen > 0) {
+            let addrOffset = addrType === 3 ? 2 : 1;
+            const dataOffset = addrOffset + addrLen + 2;
+            if (len < dataOffset) return result.needMore = true, result;
+            const portOffset = dataOffset - 2, port = (chunk[portOffset] << 8) | chunk[portOffset + 1];
+            if (enableSniSniff && addrType !== 3 && len >= dataOffset) {
+                const sniRes = extractSniBytes(chunk.subarray(dataOffset));
+                if (sniRes?.needMore) return result.needMore = true, result;
+                sniRes?.len && (addrType = 3, addrOffset = dataOffset + sniRes.offset, addrLen = sniRes.len);
+            }
+            result.success = true, result.parsedRequest = {addrType, addrBytes: chunk.subarray(addrOffset, addrOffset + addrLen), dataOffset, port, isDns: port === 53};
+            return result;
+        }
+    }
+    if (chunk[0] !== 1 && chunk[0] !== 3 && chunk[0] !== 4 && len < 56) return result.needMore = true, result;
+    return result;
+};
 const ipv4ToNat64Ipv6 = (ipv4Address, nat64Prefixes) => {
     const parts = ipv4Address.split('.');
     let hexStr = "";
@@ -1319,10 +1842,7 @@ const concurrentStrategyExec = (parsedRequest, params, exec, limit, txt) => {
     const attempts = params.map(param => Promise.resolve().then(() => exec(parsedRequest, param, limit, txt)));
     return raceAny(attempts);
 };
-const getUrlParam = (offset, len) => {
-    if (len <= 0) return null;
-    return textDecoder.decode(wasmMem.subarray(dataPtr + offset, dataPtr + offset + len));
-};
+const paramRegex = /(speed|gs5|s5all|ghttp|httpall|ghttps|httpsall|gnat64|nat64all|gturn|turnall|gturns|turnsall|gsstp|sstpall|sstp|s5|socks|http|https|nat64|turn|turns|txtip|ip)(?:=|:\/\/|%3A%2F%2F)([^&]+)|(proxyall|globalproxy|global)/gi;
 const urlListCacheDict = new Map(), urlListCacheKeys = new Array(urlParamCacheLimit);
 let urlListCacheIndex = 0;
 const establishTcpConnection = async (parsedRequest, request) => {
@@ -1337,17 +1857,17 @@ const establishTcpConnection = async (parsedRequest, request) => {
     if (cachedResult !== undefined) {
         list = cachedResult.list, speed = cachedResult.speed;
     } else {
-        if (clean.length < 6 || clean.length > 1024) {
+        if (clean.length < 6) {
             list.push({type: 0}, {type: 3}, {type: 3, param: finallyProxyHost});
         } else {
-            const urlBytes = textEncoder.encode(clean);
-            wasmMem.set(urlBytes, dataPtr);
-            parseUrlWasm(urlBytes.length);
-            const r = wasmRes;
-            const s5Val = getUrlParam(r[15], r[16]), httpVal = getUrlParam(r[17], r[18]), nat64Val = getUrlParam(r[19], r[20]), turnVal = getUrlParam(r[24], r[25]), ipVal = getUrlParam(r[21], r[22]), httpsVal = getUrlParam(r[26], r[27]), txtipVal = getUrlParam(r[28], r[29]), turnsVal = getUrlParam(r[32], r[33]), sstpVal = getUrlParam(r[34], r[35]);
-            speed = getUrlParam(r[30], r[31]);
-            const proxyAll = r[23] === 1;
-            !proxyAll && list.push({type: 0});
+            const p = Object.create(null);
+            paramRegex.lastIndex = 0;
+            let m;
+            while ((m = paramRegex.exec(clean))) {p[(m[1] || m[3]).toLowerCase()] = m[2] ? (m[2].charCodeAt(m[2].length - 1) === 61 ? m[2].slice(0, -1) : m[2]) : true}
+            if (p.speed) speed = p.speed;
+            const s5 = p.gs5 || p.s5all || p.s5 || p.socks, http = p.ghttp || p.httpall || p.http, https = p.ghttps || p.httpsall || p.https, sstp = p.gsstp || p.sstpall || p.sstp, nat64 = p.gnat64 || p.nat64all || p.nat64, turn = p.gturn || p.turnall || p.turn, turns = p.gturns || p.turnsall || p.turns;
+            const proxyAll = !!(p.gs5 || p.s5all || p.ghttp || p.httpall || p.ghttps || p.httpsall || p.gsstp || p.sstpall || p.gnat64 || p.nat64all || p.gturn || p.turnall || p.gturns || p.turnsall || p.proxyall || p.globalproxy || p.global);
+            if (!proxyAll) list.push({type: 0});
             const add = (v, t, txt) => {
                 if (!v) return;
                 const parts = decodeURIComponent(v).split(',').filter(Boolean);
@@ -1366,11 +1886,14 @@ const establishTcpConnection = async (parsedRequest, request) => {
                     list.push({type: t, param: parsedParams, concurrent: true});
                 }
             };
-            for (const k of proxyStrategyOrder) k === 'socks' ? add(s5Val, 1) : k === 'http' ? add(httpVal, 2) : k === 'https' ? add(httpsVal, 6) : k === 'sstp' ? add(sstpVal, 8) : k === 'turn' ? add(turnVal, 5) : k === 'turns' ? add(turnsVal, 7) : add(nat64Val, 4);
+            for (let i = 0; i < proxyStrategyOrder.length; i++) {
+                const k = proxyStrategyOrder[i];
+                add(k === 'socks' ? s5 : k === 'http' ? http : k === 'https' ? https : k === 'sstp' ? sstp : k === 'turn' ? turn : k === 'turns' ? turns : nat64, k === 'socks' ? 1 : k === 'http' ? 2 : k === 'https' ? 6 : k === 'sstp' ? 8 : k === 'turn' ? 5 : k === 'turns' ? 7 : 4);
+            }
             if (proxyAll) {
-                !list.length && list.push({type: 0});
+                if (!list.length) list.push({type: 0});
             } else {
-                add(ipVal, 3), add(txtipVal, 3, true);
+                add(p.ip, 3), add(p.txtip, 3, true);
                 list.push({type: 3}, {type: 3, param: finallyProxyHost});
             }
         }
@@ -1383,8 +1906,8 @@ const establishTcpConnection = async (parsedRequest, request) => {
     for (let i = 0; i < list.length; i++) {
         try {
             const exec = strategyExecutorMap.get(list[i].type);
-            const sub = (list[i].concurrent && Array.isArray(list[i].param)) ? Math.max(1, Math.floor(concurrency / list[i].param.length)) : undefined;
-            const socket = await (list[i].concurrent && Array.isArray(list[i].param) ? concurrentStrategyExec(parsedRequest, list[i].param, exec, sub, list[i].txt) : exec(parsedRequest, list[i].param, undefined, list[i].txt));
+            const sub = (list[i]['concurrent'] && Array.isArray(list[i].param)) ? Math.max(1, Math.floor(concurrency / list[i].param.length)) : undefined;
+            const socket = await (list[i]['concurrent'] && Array.isArray(list[i].param) ? concurrentStrategyExec(parsedRequest, list[i].param, exec, sub, list[i].txt) : exec(parsedRequest, list[i].param, undefined, list[i].txt));
             if (socket) return {socket, speed};
         } catch {}
     }
@@ -1496,16 +2019,11 @@ const handleSession = async (chunk, state, request, writable, close, isEarlyData
     const allowNeedMore = state.allowNeedMore === true;
     if (allowNeedMore) state.needMore = false;
     let parsedRequest, payload, isSs = false;
-    const ssEnabled = !state.disableSsAead && !!config?.sspass && !state.tcpWriter && state.socks5State === 0, parseLen = Math.min(chunk.length, 2048);
-    wasmMem.set(chunk.subarray(0, parseLen), dataPtr);
-    const success = parseProtocolWasm(parseLen, state.socks5State), r = wasmRes, hLen = r[12];
-    if (hLen > 0) {
-        const handshake = wasmMem.slice(dataPtr, dataPtr + hLen);
-        writable.send(handshake);
-    }
-    if (!success) {
-        if (r[4] > 0) return state.socks5State = r[4];
-        if (allowNeedMore && r[14] === 1) return state.needMore = true;
+    const ssEnabled = !state.disableSsAead && !!ssAeadPassword && !state.tcpWriter && state.socks5State === 0, parsed = parseProtocolChunk(chunk, state.socks5State);
+    if (parsed.handshake) writable.send(parsed.handshake);
+    if (!parsed.success) {
+        if (parsed.nextSocksState > 0) return state.socks5State = parsed.nextSocksState;
+        if (allowNeedMore && parsed.needMore) return state.needMore = true;
         if (ssEnabled && chunk.length >= 34) {
             try {
                 const decryptCtx = await createSsAeadCtx(chunk.subarray(0, 16)), plain = await ssAeadDecryptFeed(decryptCtx, chunk.subarray(16)), plainLen = plain.length;
@@ -1533,7 +2051,7 @@ const handleSession = async (chunk, state, request, writable, close, isEarlyData
         }
         if (!isSs) return close();
     } else {
-        state.socks5State = 0, parsedRequest = {addrType: r[5], port: r[6], dataOffset: r[7], isDns: r[8] === 1, addrBytes: chunk.subarray(r[9], r[9] + r[10]), isHttp: r[11] === 3}, payload = chunk.subarray(parsedRequest.dataOffset);
+        state.socks5State = 0, parsedRequest = parsed.parsedRequest, payload = chunk.subarray(parsedRequest.dataOffset);
     }
     if (parsedRequest.isDns) {
         const dnsWriter = createDnsWriter(state, writable, close, !(isEarlyData && payload.byteLength));
@@ -1640,89 +2158,16 @@ const handleXwebPost = async (request) => {
     })().catch(close);
     return new Response(bridge.readable, {headers: xwebHeaders});
 };
-const getSub = async (request, url, uuid) => {
-    if (uuid && url.searchParams.get('uuid') !== uuid) return fetch(errorHtmlUrl);
-    const ua = (request.headers.get('User-Agent') || '').toLowerCase();
-    const proxyPath = url.searchParams.get('path') || '';
-    const host = url.hostname;
-    const hasVL = url.searchParams.get('vl') === '1';
-    const hasTR = url.searchParams.get('tj') === '1';
-    const hasWS = url.searchParams.get('ws') === '1';
-    const hasXweb = url.searchParams.get('xweb') === '1';
-    const hasECH = url.searchParams.get('ech') === '1';
-    const hasWsNoTLS = url.searchParams.get('wstls') === '0' || url.searchParams.get('wsnotls') === '1';
-    const encPath = encodeURIComponent(proxyPath);
-    const parts = [];
-    const processTemplate = (index, defaultPort = 443) => {
-        if (cachedTemplates[index]) {
-            const tmpl = cachedTemplates[index].replaceAll("{{HOST}}", host).replaceAll("{{PATH}}", encPath);
-            ipListAll.forEach(entry => {
-                const node = parseSubNode(entry, defaultPort);
-                if (!node) return;
-                parts.push(tmpl.replaceAll("{{IP}}", node.ip).replaceAll("{{port}}", node.port).replaceAll("{{name}}", node.name));
-            });
-        }
-    };
-    const addNodes = (base, allowWsNoTLS) => {
-        const wsNoTLS = allowWsNoTLS && hasWsNoTLS;
-        const xwebBase = base + (allowWsNoTLS ? 3 : 2);
-        if (hasWS) processTemplate(base + (wsNoTLS ? 2 : hasECH ? 1 : 0), wsNoTLS ? 80 : 443);
-        if (hasXweb) processTemplate(xwebBase + (hasECH ? 1 : 0));
-    };
-    if (hasVL) addNodes(0, true);
-    if (hasTR) addNodes(5, false);
-    const finalLinks = parts.join("\n");
-    const base64Links = btoa(unescape(encodeURIComponent(finalLinks)));
-    if (ua.includes(strList[18])) return new Response(base64Links, {headers: {'Content-Type': 'text/plain; charset=utf-8'}});
-    if (url.searchParams.get('format') === 'raw') return new Response(finalLinks, {headers: {'Content-Type': 'text/plain; charset=utf-8'}});
-    const target = (url.searchParams.has(strList[5]) || ua.includes(strList[5]) || ua.includes(strList[15]) || ua.includes(strList[16])) ? strList[5]
-        : (url.searchParams.has(strList[11]) || url.searchParams.has(strList[6]) || ua.includes(strList[12]) || ua.includes(strList[6])) ? strList[6]
-            : (url.searchParams.has(strList[13]) || ua.includes(strList[13])) ? strList[7]
-                : (url.searchParams.has(strList[8]) || ua.includes(strList[14])) ? strList[8]
-                    : (url.searchParams.has(strList[9]) || ua.includes(strList[9])) ? strList[9]
-                        : (url.searchParams.has(strList[10]) || ua.includes(strList[10])) ? strList[10] : '';
-    if (target) {
-        const baseUrl = `${url.protocol}//${url.host}${url.pathname}?uuid=${globalThis.subUuid}&format=raw&path=${encPath}&vl=${hasVL ? 1 : 0}&tj=${hasTR ? 1 : 0}&ws=${hasWS ? 1 : 0}&wstls=${hasWsNoTLS ? 0 : 1}&xweb=${hasXweb ? 1 : 0}&ech=${hasECH ? 1 : 0}`;
-        const convertUrl = `${strList[0]}/sub?target=${target}&url=${encodeURIComponent(baseUrl)}&insert=false&config=${encodeURIComponent(strList[1])}&emoji=true&scv=true`;
-        try {
-            const response = await fetch(convertUrl, {
-                headers: {'User-Agent': strList[18] + ' for ' + target + ' ' + userAgentSuffix}
-            });
-            if (response.ok) {
-                return new Response(await response.text(), {
-                    headers: {
-                        'Content-Type': target === strList[5] ? 'application/x-yaml; charset=utf-8' : 'text/plain; charset=utf-8',
-                        'Content-Disposition': `attachment; filename*=utf-8''${encodeURIComponent(strList[17])}`,
-                        'Subscription-Userinfo': 'upload=0; download=0; total=1125899906842624; expire=253402271999',
-                        'Profile-Update-Interval': '6'
-                    }
-                });
-            }
-        } catch {}
-    }
-    return new Response(base64Links, {headers: {'Content-Type': 'text/plain; charset=utf-8', 'Subscription-Userinfo': 'upload=0; download=0; total=1125899906842624; expire=253402271999'}});
-};
 export default {
-    async fetch(request, env) {
-        if (!isInitialized) initializeWasm(env);
+    async fetch(request) {
         if (request.method === 'POST' && request.headers.get('content-type')?.startsWith('application/grpc')) return handleXwebPost(request);
         if (request.headers.get('Upgrade') === 'websocket') {
             const {0: clientSocket, 1: webSocket} = new WebSocketPair();
+            // @ts-ignore
             webSocket.accept({allowHalfOpen: true}), webSocket.binaryType = "arraybuffer";
             handleWebSocketConn(webSocket, request);
             return new Response(null, {status: 101, webSocket: clientSocket});
         }
-        const url = new URL(request.url);
-        const {uuid, password, user, pass, sspass} = getEnv(env);
-        if (url.pathname === '/sub') return await getSub(request, url, uuid);
-        if (url.pathname === `/${uuid}` || url.pathname === `/${password}`) {
-            const panelResponse = await fetch(panelHtmlUrl);
-            if (!panelResponse.ok) throw new Error(`Failed to fetch panel html: ${panelResponse.status}`);
-            let html = await panelResponse.text();
-            const map = {UUID: uuid, PASS: password, HTTPPASS: `${user}:${pass}`, SSPASS: sspass, IPLIST: JSON.stringify(ipListAll), ECHDNS: encodeURIComponent(sharedEchDns)};
-            html = html.replace(/{{(UUID|PASS|HTTPPASS|SSPASS|IPLIST|ECHDNS)}}/g, (_, k) => map[k]);
-            return new Response(html, {headers: {'Content-Type': 'text/html; charset=UTF-8'}});
-        }
-        return fetch(errorHtmlUrl);
+        return fetch('https://1345695.github.io/index-404-html/');
     }
 };

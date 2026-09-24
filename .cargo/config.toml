@@ -1,0 +1,9 @@
+[build]
+target = "wasm32-unknown-unknown"
+
+[target.wasm32-unknown-unknown]
+# 强制开启 simd128 特性
+rustflags = [
+    "-C", "target-feature=+simd128",
+    "-C", "link-arg=-zstack-size=32768",
+]
