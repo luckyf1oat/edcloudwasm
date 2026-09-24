@@ -18,12 +18,13 @@ jobs:
         run: |
           git config user.name "luckyf1oat"
           git config user.email "luckyf1oat@users.noreply.github.com"
+          git remote remove upstream 2>/dev/null || true
           git remote add upstream https://github.com/1345695/edcloudwasm.git
           git fetch upstream
           # 先保存我的配置
           cp wrangler.toml /tmp/my_wrangler.toml
           # 合并上游(冲突时以上游代码为准 — 我的自定义只在 wrangler.toml)
-          git merge upstream/main --strategy-option=theirs --no-edit || true
+          git merge upstream/main -X theirs --allow-unrelated-histories --no-edit
 
       - name: Restore my config values
         run: |
