@@ -36,12 +36,9 @@ const urlParamCacheLimit = 20;//URL参数解析结果缓存条数
 // ---------------------------------------------------------------------------------
 //出站socket获取顺序，全局模式下按数组顺序，非全局为：直连>socks>http>https>sstp>turn>turns>nat64>proxyip>finallyProxyHost
 const proxyStrategyOrder = ['socks', 'http', 'https', 'sstp', 'turn', 'turns', 'nat64'];
-const sharedEchDns = 'lido.fi+https://223.5.5.5/dns-query'; //ECHDNS配置
 const dohEndpoints = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/dns-query'];
 const dohNatEndpoints = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve'];
 const finallyProxyHost = 'proxy.zjcloud.us.ci';//兜底proxyip
-// 订阅和面板使用的优选ip地址，可支持ip:port#name格式
-const ipListAll = ["172.64.154.125", "104.18.39.123", "172.64.145.18", "104.18.42.218", "104.18.33.131", "172.64.145.38", "172.64.145.202", "104.18.42.151"];
 const traceUrl = 'http://cp.cloudflare.com/cdn-cgi/trace', proxySuffix = '.proxy.zjcloud.us.ci';
 let currentColo = null, pendingPromise = null;
 const getCurrentColo = () => {
@@ -53,18 +50,12 @@ const getCurrentColo = () => {
     }).catch(() => currentColo = finallyProxyHost).finally(() => {pendingPromise = null})
 };
 const textEncoder = new TextEncoder(), textDecoder = new TextDecoder();
-const panelHtmlUrl = 'https://1345695.github.io/index-404-html/panel';
 const errorHtmlUrl = 'https://1345695.github.io/index-404-html/';
 import wasmModule from './protocol.wasm';
 const instance = new WebAssembly.Instance(wasmModule);
-const {
-    memory, getUuidPtr, getResultPtr, getDataPtr, getHttpAuthPtr, getSocks5AuthPtr, parseProtocolWasm, parseUrlWasm,
-    initCredentialsWasm, getTemplateWasm, getSecretStringWasm
-} = instance.exports;
-const wasmMem = new Uint8Array(memory.buffer);
-const wasmRes = new Int32Array(memory.buffer, getResultPtr(), 36);
-const dataPtr = getDataPtr();
-let isInitialized = false, config = null, cachedTemplates = null, strList = null, userAgentSuffix = null;
+const {memory, getUuidPtr, getResultPtr, getDataPtr, getHttpAuthPtr, getSocks5AuthPtr, parseProtocolWasm, parseUrlWasm, initCredentialsWasm} = instance.exports;
+const wasmMem = new Uint8Array(memory.buffer), wasmRes = new Int32Array(memory.buffer, getResultPtr(), 36), dataPtr = getDataPtr();
+let isInitialized = false, config = null;
 const getEnv = (env) => {
     if (config) return config;
     config = {
@@ -102,24 +93,6 @@ const initializeWasm = (env) => {
         socks5Pkg[0] = 1, socks5Pkg[1] = userBytes.length, socks5Pkg.set(userBytes, 2), socks5Pkg[2 + userBytes.length] = passBytes.length, socks5Pkg.set(passBytes, 3 + userBytes.length);
         wasmMem.set(socks5Pkg, getSocks5AuthPtr());
         wasmRes[3] = socks5Pkg.length;
-    }
-    cachedTemplates = new Array(9);
-    const subUuid = uuid || crypto.randomUUID();
-    const subPassword = password || crypto.randomUUID();
-    globalThis.subUuid = subUuid;
-    const getSecret = (idx) => {
-        const len = getSecretStringWasm(idx);
-        return textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
-    };
-    strList = new Array(19);
-    for (let i = 0; i < 19; i++) {strList[i] = getSecret(i)}
-    const edge = strList[2];
-    userAgentSuffix = edge + strList[3] + edge + strList[4];
-    for (let i = 0; i < 9; i++) {
-        const len = getTemplateWasm(i);
-        const tmpl = textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + len));
-        const baseTmpl = tmpl.replaceAll("{{ECHDNS}}", encodeURIComponent(sharedEchDns));
-        cachedTemplates[i] = i < 5 ? baseTmpl.replaceAll("{{UUID}}", subUuid) : baseTmpl.replaceAll("{{PASSWORD}}", subPassword);
     }
     isInitialized = true;
 };
@@ -284,15 +257,6 @@ const parseHostPort = (addr, defaultPort) => {
         port = addr.substring(idx + 1);
     }
     return [host, (port = parseInt(port), isNaN(port) ? defaultPort : port)];
-};
-const parseSubNode = (entry, defaultPort = 443) => {
-    const raw = (entry || '').trim();
-    if (!raw) return null;
-    const hashIndex = raw.indexOf('#');
-    const endpoint = hashIndex === -1 ? raw : raw.slice(0, hashIndex).trim();
-    const customName = hashIndex === -1 ? '' : raw.slice(hashIndex + 1).trim();
-    const [ip, portNum] = parseHostPort(endpoint || raw, defaultPort);
-    return {ip, port: String(portNum), name: customName || ip};
 };
 const parseAuthString = (authParam, defaultPort = 1080) => {
     let username, password, hostStr;
@@ -1640,68 +1604,6 @@ const handleXwebPost = async (request) => {
     })().catch(close);
     return new Response(bridge.readable, {headers: xwebHeaders});
 };
-const getSub = async (request, url, uuid) => {
-    if (uuid && url.searchParams.get('uuid') !== uuid) return fetch(errorHtmlUrl);
-    const ua = (request.headers.get('User-Agent') || '').toLowerCase();
-    const proxyPath = url.searchParams.get('path') || '';
-    const host = url.hostname;
-    const hasVL = url.searchParams.get('vl') === '1';
-    const hasTR = url.searchParams.get('tj') === '1';
-    const hasWS = url.searchParams.get('ws') === '1';
-    const hasXweb = url.searchParams.get('xweb') === '1';
-    const hasECH = url.searchParams.get('ech') === '1';
-    const hasWsNoTLS = url.searchParams.get('wstls') === '0' || url.searchParams.get('wsnotls') === '1';
-    const encPath = encodeURIComponent(proxyPath);
-    const parts = [];
-    const processTemplate = (index, defaultPort = 443) => {
-        if (cachedTemplates[index]) {
-            const tmpl = cachedTemplates[index].replaceAll("{{HOST}}", host).replaceAll("{{PATH}}", encPath);
-            ipListAll.forEach(entry => {
-                const node = parseSubNode(entry, defaultPort);
-                if (!node) return;
-                parts.push(tmpl.replaceAll("{{IP}}", node.ip).replaceAll("{{port}}", node.port).replaceAll("{{name}}", node.name));
-            });
-        }
-    };
-    const addNodes = (base, allowWsNoTLS) => {
-        const wsNoTLS = allowWsNoTLS && hasWsNoTLS;
-        const xwebBase = base + (allowWsNoTLS ? 3 : 2);
-        if (hasWS) processTemplate(base + (wsNoTLS ? 2 : hasECH ? 1 : 0), wsNoTLS ? 80 : 443);
-        if (hasXweb) processTemplate(xwebBase + (hasECH ? 1 : 0));
-    };
-    if (hasVL) addNodes(0, true);
-    if (hasTR) addNodes(5, false);
-    const finalLinks = parts.join("\n");
-    const base64Links = btoa(unescape(encodeURIComponent(finalLinks)));
-    if (ua.includes(strList[18])) return new Response(base64Links, {headers: {'Content-Type': 'text/plain; charset=utf-8'}});
-    if (url.searchParams.get('format') === 'raw') return new Response(finalLinks, {headers: {'Content-Type': 'text/plain; charset=utf-8'}});
-    const target = (url.searchParams.has(strList[5]) || ua.includes(strList[5]) || ua.includes(strList[15]) || ua.includes(strList[16])) ? strList[5]
-        : (url.searchParams.has(strList[11]) || url.searchParams.has(strList[6]) || ua.includes(strList[12]) || ua.includes(strList[6])) ? strList[6]
-            : (url.searchParams.has(strList[13]) || ua.includes(strList[13])) ? strList[7]
-                : (url.searchParams.has(strList[8]) || ua.includes(strList[14])) ? strList[8]
-                    : (url.searchParams.has(strList[9]) || ua.includes(strList[9])) ? strList[9]
-                        : (url.searchParams.has(strList[10]) || ua.includes(strList[10])) ? strList[10] : '';
-    if (target) {
-        const baseUrl = `${url.protocol}//${url.host}${url.pathname}?uuid=${globalThis.subUuid}&format=raw&path=${encPath}&vl=${hasVL ? 1 : 0}&tj=${hasTR ? 1 : 0}&ws=${hasWS ? 1 : 0}&wstls=${hasWsNoTLS ? 0 : 1}&xweb=${hasXweb ? 1 : 0}&ech=${hasECH ? 1 : 0}`;
-        const convertUrl = `${strList[0]}/sub?target=${target}&url=${encodeURIComponent(baseUrl)}&insert=false&config=${encodeURIComponent(strList[1])}&emoji=true&scv=true`;
-        try {
-            const response = await fetch(convertUrl, {
-                headers: {'User-Agent': strList[18] + ' for ' + target + ' ' + userAgentSuffix}
-            });
-            if (response.ok) {
-                return new Response(await response.text(), {
-                    headers: {
-                        'Content-Type': target === strList[5] ? 'application/x-yaml; charset=utf-8' : 'text/plain; charset=utf-8',
-                        'Content-Disposition': `attachment; filename*=utf-8''${encodeURIComponent(strList[17])}`,
-                        'Subscription-Userinfo': 'upload=0; download=0; total=1125899906842624; expire=253402271999',
-                        'Profile-Update-Interval': '6'
-                    }
-                });
-            }
-        } catch {}
-    }
-    return new Response(base64Links, {headers: {'Content-Type': 'text/plain; charset=utf-8', 'Subscription-Userinfo': 'upload=0; download=0; total=1125899906842624; expire=253402271999'}});
-};
 export default {
     async fetch(request, env) {
         if (!isInitialized) initializeWasm(env);
@@ -1711,17 +1613,6 @@ export default {
             webSocket.accept({allowHalfOpen: true}), webSocket.binaryType = "arraybuffer";
             handleWebSocketConn(webSocket, request);
             return new Response(null, {status: 101, webSocket: clientSocket});
-        }
-        const url = new URL(request.url);
-        const {uuid, password, user, pass, sspass} = getEnv(env);
-        if (url.pathname === '/sub') return await getSub(request, url, uuid);
-        if (url.pathname === `/${uuid}` || url.pathname === `/${password}`) {
-            const panelResponse = await fetch(panelHtmlUrl);
-            if (!panelResponse.ok) throw new Error(`Failed to fetch panel html: ${panelResponse.status}`);
-            let html = await panelResponse.text();
-            const map = {UUID: uuid, PASS: password, HTTPPASS: `${user}:${pass}`, SSPASS: sspass, IPLIST: JSON.stringify(ipListAll), ECHDNS: encodeURIComponent(sharedEchDns)};
-            html = html.replace(/{{(UUID|PASS|HTTPPASS|SSPASS|IPLIST|ECHDNS)}}/g, (_, k) => map[k]);
-            return new Response(html, {headers: {'Content-Type': 'text/html; charset=UTF-8'}});
         }
         return fetch(errorHtmlUrl);
     }
