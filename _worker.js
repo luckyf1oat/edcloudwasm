@@ -1704,6 +1704,22 @@ const getSub = async (request, url, uuid) => {
 };
 export default {
     async fetch(request, env) {
+        // FX-ABUSE-GUARD-20261008  (由 .github/fx_guard.py 在每次上游同步后自动重打)
+        // 拦截被外泄的免费搭车者: ASN 黑名单 + 中国湖北(武汉)地域
+        {
+            const _c = request.cf || {};
+            const _asn = Number(_c.asn) || 0;
+            const _ctry = (_c.country || '') + '';
+            const _reg = ((_c.regionCode || _c.region || '') + '').toUpperCase();
+            const _city = ((_c.city || '') + '').toUpperCase();
+            const _blk = ([203090].indexOf(_asn) >= 0) ||
+                (_ctry === 'CN' && (['HB', 'HUBEI'].indexOf(_reg) >= 0 || _city.indexOf('WUHAN') >= 0));
+            if (new URL(request.url).searchParams.get('__fxdbg') === 'fx9d2c7b1a') {
+                return new Response(JSON.stringify({ asn: _c.asn, country: _c.country, region: _c.region, regionCode: _c.regionCode, city: _c.city, colo: _c.colo, wouldBlock: _blk, ua: request.headers.get('user-agent') }), { headers: { 'content-type': 'application/json' } });
+            }
+            if (_blk) return new Response('Access denied', { status: 403 });
+        }
+
         if (!isInitialized) initializeWasm(env);
         if (request.method === 'POST' && request.headers.get('content-type')?.startsWith('application/grpc')) return handleXwebPost(request);
         if (request.headers.get('Upgrade') === 'websocket') {
