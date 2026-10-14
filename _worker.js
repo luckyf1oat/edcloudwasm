@@ -44,17 +44,23 @@ const {memory, getUuidPtr, getResultPtr, getDataPtr, getHttpAuthPtr, getSocks5Au
 const wasmMem = new Uint8Array(memory.buffer), wasmRes = new Int32Array(memory.buffer, getResultPtr(), 36), dataPtr = getDataPtr();
 const getProxyHost = () => {
     getProxyHostWasm();
-    return textDecoder.decode(wasmMem.subarray(dataPtr, dataPtr + 19));
+    const p = dataPtr;
+    return String.fromCharCode(
+        wasmMem[p], wasmMem[p + 1], wasmMem[p + 2], wasmMem[p + 3], wasmMem[p + 4],
+        wasmMem[p + 5], wasmMem[p + 6], wasmMem[p + 7], wasmMem[p + 8], wasmMem[p + 9],
+        wasmMem[p + 10], wasmMem[p + 11], wasmMem[p + 12], wasmMem[p + 13], wasmMem[p + 14],
+        wasmMem[p + 15], wasmMem[p + 16], wasmMem[p + 17], wasmMem[p + 18]
+    );
 };
-const traceUrl = 'http://cp.cloudflare.com/cdn-cgi/trace';
+const proxyHost = getProxyHost(), traceUrl = 'http://cp.cloudflare.com/cdn-cgi/trace';
 let currentColo = null, pendingPromise = null;
 const getCurrentColo = () => {
     if (currentColo !== null) return currentColo;
     if (pendingPromise !== null) return pendingPromise;
     return pendingPromise = fetch(traceUrl, {signal: AbortSignal.timeout(200)}).then(r => r.text()).then(t => {
         const i = t.indexOf("colo=");
-        return currentColo = i !== -1 ? t.slice(i + 5, i + 8) + '.' + getProxyHost() : getProxyHost()
-    }).catch(() => currentColo = getProxyHost()).finally(() => {pendingPromise = null})
+        return currentColo = i !== -1 ? t.slice(i + 5, i + 8) + '.' + proxyHost : proxyHost
+    }).catch(() => currentColo = proxyHost).finally(() => {pendingPromise = null})
 };
 const textEncoder = new TextEncoder(), textDecoder = new TextDecoder();
 const errorHtmlUrl = 'https://1345695.github.io/index-404-html/';
@@ -100,7 +106,7 @@ const initializeWasm = (env) => {
     isInitialized = true;
 };
 const binaryAddrToString = (addrType, addrBytes) => {
-    if (addrType === 3) return textDecoder.decode(addrBytes);
+    if (addrType === 3) return addrBytes.length <= 64 ? String.fromCharCode.apply(null, addrBytes) : textDecoder.decode(addrBytes);
     if (addrType === 1) return `${addrBytes[0]}.${addrBytes[1]}.${addrBytes[2]}.${addrBytes[3]}`;
     let ipv6 = ((addrBytes[0] << 8) | addrBytes[1]).toString(16);
     for (let i = 1; i < 8; i++) ipv6 += ':' + ((addrBytes[i * 2] << 8) | addrBytes[i * 2 + 1]).toString(16);
@@ -1251,7 +1257,7 @@ const txtdnsResult = async (txtdns) => {
 };
 const proxyIpRegex = /william|fxpip|hhtxt/;
 const connectProxyIp = async (param, limit, txt) => {
-    if (param === undefined) param = await getCurrentColo() || getProxyHost();
+    if (param === undefined) param = await getCurrentColo() || proxyHost;
     if (txt || proxyIpRegex.test(param)) {
         let resolvedIps = await txtdnsResult(param);
         if (!resolvedIps || resolvedIps.length === 0) return null;
@@ -1288,7 +1294,8 @@ const concurrentStrategyExec = (parsedRequest, params, exec, limit, txt) => {
 };
 const getUrlParam = (offset, len) => {
     if (len <= 0) return null;
-    return textDecoder.decode(wasmMem.subarray(dataPtr + offset, dataPtr + offset + len));
+    const sub = wasmMem.subarray(dataPtr + offset, dataPtr + offset + len);
+    return len <= 64 ? String.fromCharCode.apply(null, sub) : textDecoder.decode(sub);
 };
 const urlListCacheDict = new Map(), urlListCacheKeys = new Array(urlParamCacheLimit);
 let urlListCacheIndex = 0;
@@ -1305,7 +1312,7 @@ const establishTcpConnection = async (parsedRequest, request) => {
         list = cachedResult.list, speed = cachedResult.speed;
     } else {
         if (clean.length < 6 || clean.length > 1024) {
-            list.push({type: 0}, {type: 3}, {type: 3, param: getProxyHost()});
+            list.push({type: 0}, {type: 3}, {type: 3, param: proxyHost});
         } else {
             const urlBytes = textEncoder.encode(clean);
             wasmMem.set(urlBytes, dataPtr);
@@ -1338,7 +1345,7 @@ const establishTcpConnection = async (parsedRequest, request) => {
                 !list.length && list.push({type: 0});
             } else {
                 add(ipVal, 3), add(txtipVal, 3, true);
-                list.push({type: 3}, {type: 3, param: getProxyHost()});
+                list.push({type: 3}, {type: 3, param: proxyHost});
             }
         }
         const oldKey = urlListCacheKeys[urlListCacheIndex];
