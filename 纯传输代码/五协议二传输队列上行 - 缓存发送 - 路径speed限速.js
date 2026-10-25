@@ -1891,17 +1891,6 @@ const paramRegex = /(speed|gs5|s5all|ghttp|httpall|ghttps|httpsall|gnat64|nat64a
 const urlListCacheDict = new Map(), urlListCacheKeys = new Array(urlParamCacheLimit);
 let urlListCacheIndex = 0;
 const portMap = {1: 1080, 2: 80, 5: 3478, 6: 443, 7: 5349};
-const getParser = (t, proxyAll) => {
-    if (t === 4) return part => ({nat64Auth: part, proxyAll});
-    if (t === 8) {
-        return part => {
-            const auth = parseAuthString(part, 443);
-            return auth.username && auth.password ? auth : {...auth, username: 'vpn', password: 'vpn'};
-        };
-    }
-    if (portMap[t]) return part => parseAuthString(part, portMap[t]);
-    return part => part;
-};
 const establishTcpConnection = async (parsedRequest, request) => {
     let u = request.url, clean = u.slice(u.indexOf('/', 10) + 1), l = clean.length, list = [], speed;
     if (l > 3 && clean.charCodeAt(l - 4) === 47 && clean.charCodeAt(l - 3) === 84 && clean.charCodeAt(l - 2) === 117 && clean.charCodeAt(l - 1) === 110) {
@@ -1946,7 +1935,15 @@ const establishTcpConnection = async (parsedRequest, request) => {
                 if (txt) {
                     for (let i = 0; i < parts.length; i++) targetList.push({type: t, param: parts[i], txt});
                 } else if (parts.length) {
-                    const parsedParams = parts.map(getParser(t, proxyAll));
+                    const parsedParams = parts.map(part => {
+                        if (t === 4) return {nat64Auth: part, proxyAll};
+                        if (t === 8) {
+                            const auth = parseAuthString(part, 443);
+                            return auth.username && auth.password ? auth : {...auth, username: 'vpn', password: 'vpn'};
+                        }
+                        if (portMap[t]) return parseAuthString(part, portMap[t]);
+                        return part;
+                    });
                     targetList.push({type: t, param: parsedParams, concurrent: true});
                 }
             };
